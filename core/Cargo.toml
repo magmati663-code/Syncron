@@ -5,3 +5,16 @@ edition = "2021"
 
 [dependencies]
 unicode-normalization = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+notify = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+filetime = "0.2"
+log = "0.4"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+unicode-normalization = "0.1"
+filetime = "0.2"

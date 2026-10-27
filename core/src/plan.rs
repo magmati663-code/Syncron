@@ -1,20 +1,21 @@
-//! Planowanie synchronizacji: algorytm trójstronny (lewy, prawy, ostatnia migawka).
+//! Planowanie synchronizacji: algorytm trójstronny (lewy, prawy, ostatnia migawka każdej strony).
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meta {
     pub size: u64,
     pub mtime: i64, // sekundy
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     LeftToRight,
     RightToLeft,
     TwoWay,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Conflict {
     Newer,
     Larger,
@@ -29,16 +30,18 @@ pub struct Options {
     pub mode: Mode,
     pub no_delete_left: bool,
     pub no_delete_right: bool,
+    /// Tylko dodawaj nowe pliki: nic nie nadpisuj i nic nie usuwaj.
+    pub only_add: bool,
     pub conflict: Conflict,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     CopyToRight,
     CopyToLeft,
     DeleteLeft,
     DeleteRight,
-    /// Konflikt do rozstrzygnięcia przez użytkownika lub zachowania obu wersji.
+    /// Konflikt: `keep_both` zachowuje obie wersje, w przeciwnym razie czeka na użytkownika.
     Conflict { keep_both: bool },
 }
 
@@ -47,10 +50,11 @@ pub type Tree = BTreeMap<String, Meta>;
 /// Tolerancja mtime (FAT/SMB zaokrąglają do 2 s).
 const TOL: i64 = 2;
 
-fn same(a: &Meta, b: &Meta) -> bool {
+pub fn same(a: &Meta, b: &Meta) -> bool {
     a.size == b.size && (a.mtime - b.mtime).abs() <= TOL
 }
 
+/// Zmiana względem migawki: nowy, zmieniony lub usunięty.
 fn changed(x: Option<&Meta>, base: Option<&Meta>) -> bool {
     match (x, base) {
         (None, None) => false,
@@ -60,11 +64,12 @@ fn changed(x: Option<&Meta>, base: Option<&Meta>) -> bool {
 }
 
 /// Zmiana istniejącego pliku względem migawki (usunięcie nie liczy się).
-fn lc2(x: Option<&Meta>, b: Option<&Meta>) -> bool {
-    matches!((x, b), (Some(a), Some(c)) if !same(a, c))
+fn modified(x: Option<&Meta>, base: Option<&Meta>) -> bool {
+    matches!((x, base), (Some(a), Some(b)) if !same(a, b))
 }
 
 fn resolve(l: &Meta, r: &Meta, c: Conflict) -> Action {
+    let pick = |left: bool| if left { Action::CopyToRight } else { Action::CopyToLeft };
     match c {
         Conflict::Newer if l.mtime != r.mtime => pick(l.mtime > r.mtime),
         Conflict::Larger if l.size != r.size => pick(l.size > r.size),
@@ -75,74 +80,76 @@ fn resolve(l: &Meta, r: &Meta, c: Conflict) -> Action {
     }
 }
 
-fn pick(left: bool) -> Action {
-    if left { Action::CopyToRight } else { Action::CopyToLeft }
-}
-
-/// Zwraca listę działań (tylko ścieżki wymagające pracy). Klucze powinny być znormalizowane (names::key).
-pub fn plan(left: &Tree, right: &Tree, base: &Tree, o: Options) -> BTreeMap<String, Action> {
-    let paths: BTreeSet<&String> = left.keys().chain(right.keys()).chain(base.keys()).collect();
+/// Zwraca działania (tylko ścieżki wymagające pracy). Klucze powinny być znormalizowane (names::key).
+pub fn plan(left: &Tree, right: &Tree, bl: &Tree, br: &Tree, o: Options) -> BTreeMap<String, Action> {
+    let paths: BTreeSet<&String> = left.keys().chain(right.keys()).chain(bl.keys()).chain(br.keys()).collect();
     let mut out = BTreeMap::new();
     for p in paths {
-        let (l, r, b) = (left.get(p), right.get(p), base.get(p));
-        if let Some(a) = decide(l, r, b, &o) {
+        let (l, r) = (left.get(p), right.get(p));
+        if let Some(a) = decide(l, r, bl.get(p), br.get(p), &o) {
+            if o.only_add {
+                let ok = match a {
+                    Action::CopyToRight => r.is_none(),
+                    Action::CopyToLeft => l.is_none(),
+                    _ => false,
+                };
+                if !ok {
+                    continue;
+                }
+            }
             out.insert(p.clone(), a);
         }
     }
     out
 }
 
-fn decide(l: Option<&Meta>, r: Option<&Meta>, b: Option<&Meta>, o: &Options) -> Option<Action> {
+fn decide(l: Option<&Meta>, r: Option<&Meta>, bl: Option<&Meta>, br: Option<&Meta>, o: &Options) -> Option<Action> {
     if let (Some(x), Some(y)) = (l, r) {
         if same(x, y) {
             return None;
         }
     }
+    let (lc, rc) = (changed(l, bl), changed(r, br));
     match o.mode {
         Mode::LeftToRight => match (l, r) {
+            (Some(_), Some(_)) if !lc && !rc => None,
             (Some(_), _) => Some(Action::CopyToRight),
             (None, Some(_)) if !o.no_delete_right => Some(Action::DeleteRight),
             _ => None,
         },
         Mode::RightToLeft => match (l, r) {
+            (Some(_), Some(_)) if !lc && !rc => None,
             (_, Some(_)) => Some(Action::CopyToLeft),
             (Some(_), None) if !o.no_delete_left => Some(Action::DeleteLeft),
             _ => None,
         },
-        Mode::TwoWay => {
-            let (lc, rc) = (changed(l, b), changed(r, b));
-            match (l, r) {
-                (None, None) => None,
-                (Some(_), None) => {
-                    // nowy po lewej / zmieniony po lewej / usunięty po prawej
-                    if b.is_none() || lc2(l, b) {
-                        Some(Action::CopyToRight)
-                    } else if o.no_delete_left {
-                        Some(Action::CopyToRight) // usunięcie nie propaguje się, plik wraca
-                    } else {
-                        Some(Action::DeleteLeft)
-                    }
+        Mode::TwoWay => match (l, r) {
+            (None, None) => None,
+            (Some(_), None) => {
+                if bl.is_none() || modified(l, bl) || o.no_delete_left {
+                    Some(Action::CopyToRight) // nowy, zmieniony, albo usunięcie nie propaguje się
+                } else {
+                    Some(Action::DeleteLeft)
                 }
-                (None, Some(_)) => {
-                    if b.is_none() || lc2(r, b) {
-                        Some(Action::CopyToLeft)
-                    } else if o.no_delete_right {
-                        Some(Action::CopyToLeft)
-                    } else {
-                        Some(Action::DeleteRight)
-                    }
-                }
-                (Some(x), Some(y)) => match (lc, rc) {
-                    (true, false) => Some(Action::CopyToRight),
-                    (false, true) => Some(Action::CopyToLeft),
-                    _ => Some(resolve(x, y, o.conflict)),
-                },
             }
-        }
+            (None, Some(_)) => {
+                if br.is_none() || modified(r, br) || o.no_delete_right {
+                    Some(Action::CopyToLeft)
+                } else {
+                    Some(Action::DeleteRight)
+                }
+            }
+            (Some(x), Some(y)) => match (lc, rc) {
+                (false, false) => None,
+                (true, false) => Some(Action::CopyToRight),
+                (false, true) => Some(Action::CopyToLeft),
+                (true, true) => Some(resolve(x, y, o.conflict)),
+            },
+        },
     }
 }
 
-/// Zabezpieczenie: true, gdy plan usuwa zbyt dużo (>`max_pct`% plików) lub źródło jest nagle puste.
+/// Zabezpieczenie: true, gdy plan usuwa więcej niż `max_pct`% plików.
 pub fn mass_delete_guard(actions: &BTreeMap<String, Action>, total: usize, max_pct: usize) -> bool {
     let dels = actions
         .values()
@@ -162,14 +169,17 @@ mod tests {
         v.iter().map(|(k, x)| (k.to_string(), *x)).collect()
     }
     fn opts(mode: Mode) -> Options {
-        Options { mode, no_delete_left: false, no_delete_right: false, conflict: Conflict::Newer }
+        Options { mode, no_delete_left: false, no_delete_right: false, only_add: false, conflict: Conflict::Newer }
+    }
+    fn e() -> Tree {
+        Tree::new()
     }
 
     #[test]
     fn two_way_new_files() {
         let l = tree(&[("żółw.txt", m(1, 10))]);
         let r = tree(&[("ąę.txt", m(2, 10))]);
-        let a = plan(&l, &r, &Tree::new(), opts(Mode::TwoWay));
+        let a = plan(&l, &r, &e(), &e(), opts(Mode::TwoWay));
         assert_eq!(a["żółw.txt"], Action::CopyToRight);
         assert_eq!(a["ąę.txt"], Action::CopyToLeft);
     }
@@ -177,8 +187,7 @@ mod tests {
     #[test]
     fn two_way_delete_propagates() {
         let b = tree(&[("a", m(1, 10))]);
-        let r = b.clone();
-        let a = plan(&Tree::new(), &r, &b, opts(Mode::TwoWay));
+        let a = plan(&e(), &b, &b, &b, opts(Mode::TwoWay));
         assert_eq!(a["a"], Action::DeleteRight);
     }
 
@@ -187,8 +196,7 @@ mod tests {
         let b = tree(&[("a", m(1, 10))]);
         let mut o = opts(Mode::TwoWay);
         o.no_delete_right = true;
-        let a = plan(&Tree::new(), &b.clone(), &b, o);
-        assert_eq!(a["a"], Action::CopyToLeft);
+        assert_eq!(plan(&e(), &b, &b, &b, o)["a"], Action::CopyToLeft);
     }
 
     #[test]
@@ -196,24 +204,42 @@ mod tests {
         let b = tree(&[("a", m(1, 10))]);
         let l = tree(&[("a", m(2, 100))]);
         let r = tree(&[("a", m(3, 50))]);
-        assert_eq!(plan(&l, &r, &b, opts(Mode::TwoWay))["a"], Action::CopyToRight);
+        assert_eq!(plan(&l, &r, &b, &b, opts(Mode::TwoWay))["a"], Action::CopyToRight);
     }
 
     #[test]
     fn mtime_tolerance() {
         let l = tree(&[("a", m(1, 10))]);
         let r = tree(&[("a", m(1, 11))]);
-        assert!(plan(&l, &r, &l, opts(Mode::TwoWay)).is_empty());
+        assert!(plan(&l, &r, &l, &r, opts(Mode::TwoWay)).is_empty());
+    }
+
+    #[test]
+    fn remote_without_modtime_does_not_ping_pong() {
+        // prawa strona nie zachowuje mtime: baza każdej strony jest osobna
+        let l = tree(&[("a", m(5, 10))]);
+        let r = tree(&[("a", m(5, 5000))]);
+        assert!(plan(&l, &r, &l, &r, opts(Mode::TwoWay)).is_empty());
     }
 
     #[test]
     fn one_way_mirror_and_no_delete() {
-        let l = Tree::new();
         let r = tree(&[("x", m(1, 1))]);
-        assert_eq!(plan(&l, &r, &Tree::new(), opts(Mode::LeftToRight))["x"], Action::DeleteRight);
+        assert_eq!(plan(&e(), &r, &e(), &e(), opts(Mode::LeftToRight))["x"], Action::DeleteRight);
         let mut o = opts(Mode::LeftToRight);
         o.no_delete_right = true;
-        assert!(plan(&l, &r, &Tree::new(), o).is_empty());
+        assert!(plan(&e(), &r, &e(), &e(), o).is_empty());
+    }
+
+    #[test]
+    fn only_add_never_overwrites() {
+        let l = tree(&[("a", m(2, 100)), ("b", m(1, 1))]);
+        let r = tree(&[("a", m(1, 10))]);
+        let mut o = opts(Mode::LeftToRight);
+        o.only_add = true;
+        let a = plan(&l, &r, &e(), &e(), o);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a["b"], Action::CopyToRight);
     }
 
     #[test]

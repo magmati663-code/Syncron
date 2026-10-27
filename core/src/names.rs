@@ -37,6 +37,18 @@ pub fn is_temp(name: &str) -> bool {
         || matches!(l.as_str(), ".ds_store" | "thumbs.db" | "desktop.ini")
 }
 
+/// Nazwa kopii konfliktowej: `raport.docx` -> `raport (konflikt 2026-10-27).docx`.
+pub fn conflict_name(rel: &str, stamp: &str) -> String {
+    let (dir, file) = match rel.rfind('/') {
+        Some(i) => (&rel[..=i], &rel[i + 1..]),
+        None => ("", rel),
+    };
+    match file.rfind('.') {
+        Some(i) if i > 0 => format!("{dir}{} (konflikt {stamp}){}", &file[..i], &file[i..]),
+        _ => format!("{dir}{file} (konflikt {stamp})"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +73,12 @@ mod tests {
         assert!(invalid_on_windows("plik?.txt"));
         assert!(invalid_on_windows("koniec."));
         assert!(!invalid_on_windows("Żółć.docx"));
+    }
+
+    #[test]
+    fn conflict_names() {
+        assert_eq!(conflict_name("a/żółć.docx", "X"), "a/żółć (konflikt X).docx");
+        assert_eq!(conflict_name("README", "X"), "README (konflikt X)");
     }
 
     #[test]
