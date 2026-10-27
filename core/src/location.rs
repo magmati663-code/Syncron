@@ -73,8 +73,14 @@ impl Location {
             let name = &s[..i];
             let rest = &s[i + 1..];
             // litera dysku (C:\ , C:/) to ścieżka lokalna; nazwa zdalna ma min. 2 znaki
-            let drive = name.len() == 1 && (rest.is_empty() || rest.starts_with('\\') || rest.starts_with('/'));
-            if name.len() >= 2 && !drive && name.chars().all(|c| c.is_alphanumeric() || "_-. ".contains(c)) {
+            let drive = name.len() == 1
+                && (rest.is_empty() || rest.starts_with('\\') || rest.starts_with('/'));
+            if name.len() >= 2
+                && !drive
+                && name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || "_-. ".contains(c))
+            {
                 return Location::Rclone(s.to_string());
             }
         }
@@ -107,14 +113,18 @@ impl Location {
         };
         let mut out = Listing::default();
         for (rel, meta) in raw {
-            if !rules.allows(&FileInfo { path: rel.clone(), size: meta.size }) {
+            if !rules.allows(&FileInfo {
+                path: rel.clone(),
+                size: meta.size,
+            }) {
                 continue;
             }
             let key = names::key(&rel);
-            if out.files.contains_key(&key) {
-                out.collisions.push(rel);
-            } else {
-                out.files.insert(key, Entry { real: rel, meta });
+            match out.files.entry(key) {
+                std::collections::btree_map::Entry::Occupied(_) => out.collisions.push(rel),
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert(Entry { real: rel, meta });
+                }
             }
         }
         Ok(out)
@@ -146,7 +156,9 @@ impl Location {
                         Err(e) => return Err(e.into()),
                     }
                 }
-                Err(OpError::Busy(last.map(|e| e.to_string()).unwrap_or_default()))
+                Err(OpError::Busy(
+                    last.map(|e| e.to_string()).unwrap_or_default(),
+                ))
             }
             _ => {
                 if let Location::Local(b) = self {
@@ -241,7 +253,10 @@ fn meta_of(m: &fs::Metadata) -> Option<Meta> {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    Some(Meta { size: m.len(), mtime })
+    Some(Meta {
+        size: m.len(),
+        mtime,
+    })
 }
 
 fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
@@ -263,7 +278,11 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
             if ft.is_symlink() {
                 continue;
             }
-            let r = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let r = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
             if ft.is_dir() {
                 stack.push((ent.path(), r));
             } else if ft.is_file() {
@@ -293,7 +312,10 @@ fn copy_local(src: &Path, dst: &Path) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    let fname = dst.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let fname = dst
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = dst.with_file_name(format!("{fname}.syncpolak.tmp"));
     let mut inp = open_shared(src)?;
     let before = inp.metadata()?;
@@ -304,9 +326,15 @@ fn copy_local(src: &Path, dst: &Path) -> io::Result<()> {
         drop(out);
         let after = fs::metadata(src)?;
         if after.len() != before.len() || after.modified().ok() != before.modified().ok() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "plik zmienił się w trakcie kopiowania"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "plik zmienił się w trakcie kopiowania",
+            ));
         }
-        filetime::set_file_mtime(&tmp, filetime::FileTime::from_last_modification_time(&before))?;
+        filetime::set_file_mtime(
+            &tmp,
+            filetime::FileTime::from_last_modification_time(&before),
+        )?;
         fs::rename(&tmp, dst)
     })();
     if res.is_err() {
@@ -329,7 +357,9 @@ pub fn run_rclone(args: &[&str]) -> Result<String, String> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000); // bez okna konsoli
     }
-    let out = c.output().map_err(|e| format!("nie można uruchomić rclone: {e}"))?;
+    let out = c
+        .output()
+        .map_err(|e| format!("nie można uruchomić rclone: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -340,7 +370,10 @@ pub fn run_rclone(args: &[&str]) -> Result<String, String> {
 fn rclone_op(args: &[&str]) -> Result<(), OpError> {
     run_rclone(args).map(|_| ()).map_err(|e| {
         let l = e.to_lowercase();
-        if l.contains("used by another process") || l.contains("locked") || l.contains("sharing violation") {
+        if l.contains("used by another process")
+            || l.contains("locked")
+            || l.contains("sharing violation")
+        {
             OpError::Busy(e)
         } else {
             OpError::Failed(e)
@@ -368,8 +401,19 @@ fn parse_lsjson(s: &str) -> Result<Vec<(String, Meta)>, String> {
             .as_str()
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .map(|d| d.timestamp())
-            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0));
-        out.push((path, Meta { size: size as u64, mtime }));
+            .unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            });
+        out.push((
+            path,
+            Meta {
+                size: size as u64,
+                mtime,
+            },
+        ));
     }
     Ok(out)
 }
@@ -390,9 +434,18 @@ mod tests {
     fn parse_locations() {
         assert!(matches!(Location::parse("C:\\Dane"), Location::Local(_)));
         assert!(matches!(Location::parse("C:"), Location::Local(_)));
-        assert!(matches!(Location::parse("\\\\nas\\udział"), Location::Local(_)));
-        assert!(matches!(Location::parse("/Volumes/Dysk"), Location::Local(_)));
-        assert!(matches!(Location::parse("gdrive:Dokumenty"), Location::Rclone(_)));
+        assert!(matches!(
+            Location::parse("\\\\nas\\udział"),
+            Location::Local(_)
+        ));
+        assert!(matches!(
+            Location::parse("/Volumes/Dysk"),
+            Location::Local(_)
+        ));
+        assert!(matches!(
+            Location::parse("gdrive:Dokumenty"),
+            Location::Rclone(_)
+        ));
         assert!(matches!(Location::parse("bitrix:"), Location::Rclone(_)));
     }
 

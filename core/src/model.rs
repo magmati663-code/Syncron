@@ -9,9 +9,16 @@ pub enum Schedule {
     /// Tylko ręcznie.
     Manual,
     /// Natychmiast po zmianie (watcher) + okresowy polling dla stron bez zdarzeń (dyski sieciowe, chmury).
-    Realtime { poll_secs: u64 },
-    Interval { secs: u64 },
-    Daily { hour: u32, minute: u32 },
+    Realtime {
+        poll_secs: u64,
+    },
+    Interval {
+        secs: u64,
+    },
+    Daily {
+        hour: u32,
+        minute: u32,
+    },
 }
 
 fn d_true() -> bool {
@@ -79,8 +86,18 @@ impl Job {
 
     pub fn rules(&self) -> RuleSet {
         let mut rs = RuleSet {
-            include: self.include.iter().filter(|g| !g.trim().is_empty()).map(|g| Rule::Glob(g.trim().into())).collect(),
-            exclude: self.exclude.iter().filter(|g| !g.trim().is_empty()).map(|g| Rule::Glob(g.trim().into())).collect(),
+            include: self
+                .include
+                .iter()
+                .filter(|g| !g.trim().is_empty())
+                .map(|g| Rule::Glob(g.trim().into()))
+                .collect(),
+            exclude: self
+                .exclude
+                .iter()
+                .filter(|g| !g.trim().is_empty())
+                .map(|g| Rule::Glob(g.trim().into()))
+                .collect(),
             skip_temp: true,
         };
         if let Some(min) = self.min_size.filter(|m| *m > 0) {
@@ -106,7 +123,10 @@ mod tests {
         .unwrap();
         j.exclude = vec!["*.log".into()];
         let rs = j.rules();
-        let f = |p: &str, s| FileInfo { path: p.into(), size: s };
+        let f = |p: &str, s| FileInfo {
+            path: p.into(),
+            size: s,
+        };
         assert!(!rs.allows(&f("a.txt", 5)));
         assert!(rs.allows(&f("a.txt", 50)));
         assert!(!rs.allows(&f("a.txt", 500)));

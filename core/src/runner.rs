@@ -50,7 +50,10 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(state_dir: PathBuf) -> Self {
-        Runner { state_dir, inner: Arc::new(Inner::default()) }
+        Runner {
+            state_dir,
+            inner: Arc::new(Inner::default()),
+        }
     }
 
     pub fn jobs_path(&self) -> PathBuf {
@@ -86,10 +89,22 @@ impl Runner {
             return;
         }
         let (tx, rx) = channel();
-        let (inner, dir, tx2, id) = (self.inner.clone(), self.state_dir.clone(), tx.clone(), job.id.clone());
+        let (inner, dir, tx2, id) = (
+            self.inner.clone(),
+            self.state_dir.clone(),
+            tx.clone(),
+            job.id.clone(),
+        );
         self.set(&id, |s| s.state = "idle".into());
-        let th = thread::Builder::new().name(format!("job-{id}")).spawn(move || job_loop(job, rx, tx2, inner, dir)).ok();
-        self.inner.handles.lock().unwrap().insert(id, Handle { tx, th });
+        let th = thread::Builder::new()
+            .name(format!("job-{id}"))
+            .spawn(move || job_loop(job, rx, tx2, inner, dir))
+            .ok();
+        self.inner
+            .handles
+            .lock()
+            .unwrap()
+            .insert(id, Handle { tx, th });
     }
 
     pub fn stop(&self, id: &str) {
@@ -159,11 +174,19 @@ fn in_window(w: Option<[u32; 2]>) -> bool {
 
 fn secs_until_daily(hour: u32, minute: u32) -> u64 {
     let now = Local::now();
-    let mut t = now.date_naive().and_hms_opt(hour % 24, minute % 60, 0).unwrap();
-    if t.and_local_timezone(Local).earliest().map_or(true, |x| x <= now) {
+    let mut t = now
+        .date_naive()
+        .and_hms_opt(hour % 24, minute % 60, 0)
+        .unwrap();
+    if t.and_local_timezone(Local)
+        .earliest()
+        .is_none_or(|x| x <= now)
+    {
         t += chrono::Duration::days(1);
     }
-    t.and_local_timezone(Local).earliest().map_or(3600, |x| (x - now).num_seconds().max(1) as u64)
+    t.and_local_timezone(Local)
+        .earliest()
+        .map_or(3600, |x| (x - now).num_seconds().max(1) as u64)
 }
 
 fn period(s: &Schedule) -> Option<Duration> {
@@ -171,7 +194,9 @@ fn period(s: &Schedule) -> Option<Duration> {
         Schedule::Manual => None,
         Schedule::Realtime { poll_secs } => Some(Duration::from_secs((*poll_secs).max(15))),
         Schedule::Interval { secs } => Some(Duration::from_secs((*secs).max(10))),
-        Schedule::Daily { hour, minute } => Some(Duration::from_secs(secs_until_daily(*hour, *minute))),
+        Schedule::Daily { hour, minute } => {
+            Some(Duration::from_secs(secs_until_daily(*hour, *minute)))
+        }
     }
 }
 
@@ -180,7 +205,9 @@ fn relevant(p: &Path) -> bool {
     if s.contains(TRASH_DIR) || s.contains(".syncpolak") {
         return false;
     }
-    !p.file_name().map(|n| names::is_temp(&n.to_string_lossy())).unwrap_or(false)
+    !p.file_name()
+        .map(|n| names::is_temp(&n.to_string_lossy()))
+        .unwrap_or(false)
 }
 
 fn make_watcher(job: &Job, tx: Sender<Msg>) -> Option<notify::RecommendedWatcher> {
@@ -266,7 +293,9 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
     };
 
     loop {
-        let wait = next.map(|t| t.saturating_duration_since(Instant::now())).unwrap_or(Duration::from_secs(3600));
+        let wait = next
+            .map(|t| t.saturating_duration_since(Instant::now()))
+            .unwrap_or(Duration::from_secs(3600));
         match rx.recv_timeout(wait) {
             Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(Msg::RunNow { force }) => run(force, true, &mut next),
@@ -300,7 +329,7 @@ mod tests {
     #[test]
     fn daily_is_in_future() {
         let s = secs_until_daily(3, 0);
-        assert!(s >= 1 && s <= 86400 + 3600);
+        assert!((1..=86400 + 3600).contains(&s));
     }
 
     #[test]
@@ -314,7 +343,11 @@ mod tests {
     #[test]
     fn realtime_picks_up_new_file() {
         let t = tempfile::tempdir().unwrap();
-        let (l, r, s) = (t.path().join("L"), t.path().join("R"), t.path().join("state"));
+        let (l, r, s) = (
+            t.path().join("L"),
+            t.path().join("R"),
+            t.path().join("state"),
+        );
         fs::create_dir_all(&l).unwrap();
         fs::create_dir_all(&r).unwrap();
         let job: Job = serde_json::from_value(serde_json::json!({

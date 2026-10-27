@@ -21,7 +21,10 @@ pub fn invalid_on_windows(name: &str) -> bool {
     if name.is_empty() || name.ends_with('.') || name.ends_with(' ') {
         return true;
     }
-    if name.chars().any(|c| "<>:\"/\\|?*".contains(c) || (c as u32) < 32) {
+    if name
+        .chars()
+        .any(|c| "<>:\"/\\|?*".contains(c) || (c as u32) < 32)
+    {
         return true;
     }
     let stem = name.split('.').next().unwrap_or("").to_uppercase();
@@ -33,7 +36,9 @@ pub fn is_temp(name: &str) -> bool {
     let l = name.to_lowercase();
     name.starts_with("~$")
         || name.starts_with(".~lock.")
-        || [".tmp", ".crdownload", ".part", ".syncpolak.tmp"].iter().any(|e| l.ends_with(e))
+        || [".tmp", ".crdownload", ".part", ".syncpolak.tmp"]
+            .iter()
+            .any(|e| l.ends_with(e))
         || matches!(l.as_str(), ".ds_store" | "thumbs.db" | "desktop.ini")
 }
 
@@ -77,7 +82,10 @@ mod tests {
 
     #[test]
     fn conflict_names() {
-        assert_eq!(conflict_name("a/żółć.docx", "X"), "a/żółć (konflikt X).docx");
+        assert_eq!(
+            conflict_name("a/żółć.docx", "X"),
+            "a/żółć (konflikt X).docx"
+        );
         assert_eq!(conflict_name("README", "X"), "README (konflikt X)");
     }
 

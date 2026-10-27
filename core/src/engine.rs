@@ -58,24 +58,52 @@ pub fn open_db(state_dir: &Path) -> anyhow::Result<Connection> {
 fn load_base(c: &Connection, job: &str) -> anyhow::Result<(Tree, Tree)> {
     let mut st = c.prepare("SELECT key,lsize,lmtime,rsize,rmtime FROM base WHERE job=?1")?;
     let rows = st.query_map([job], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
     })?;
     let (mut l, mut r) = (Tree::new(), Tree::new());
     for row in rows {
         let (k, ls, lm, rs, rm) = row?;
-        l.insert(k.clone(), Meta { size: ls as u64, mtime: lm });
-        r.insert(k, Meta { size: rs as u64, mtime: rm });
+        l.insert(
+            k.clone(),
+            Meta {
+                size: ls as u64,
+                mtime: lm,
+            },
+        );
+        r.insert(
+            k,
+            Meta {
+                size: rs as u64,
+                mtime: rm,
+            },
+        );
     }
     Ok((l, r))
 }
 
-pub fn history(state_dir: &Path, job: Option<&str>, limit: usize) -> anyhow::Result<Vec<HistoryRow>> {
+pub fn history(
+    state_dir: &Path,
+    job: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<HistoryRow>> {
     let c = open_db(state_dir)?;
     let mut st = c.prepare(
         "SELECT ts,job,kind,path,detail FROM history WHERE (?1 IS NULL OR job=?1) ORDER BY id DESC LIMIT ?2",
     )?;
     let rows = st.query_map(params![job, limit as i64], |r| {
-        Ok(HistoryRow { ts: r.get(0)?, job: r.get(1)?, kind: r.get(2)?, path: r.get(3)?, detail: r.get(4)? })
+        Ok(HistoryRow {
+            ts: r.get(0)?,
+            job: r.get(1)?,
+            kind: r.get(2)?,
+            path: r.get(3)?,
+            detail: r.get(4)?,
+        })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -88,8 +116,15 @@ pub fn reset_state(state_dir: &Path, job: &str) -> anyhow::Result<()> {
 }
 
 enum Out {
-    Synced { key: String, l: Meta, r: Meta, kind: &'static str },
-    Removed { key: String },
+    Synced {
+        key: String,
+        l: Meta,
+        r: Meta,
+        kind: &'static str,
+    },
+    Removed {
+        key: String,
+    },
     Conflict(String),
     Busy(String, String),
     Err(String, String),
@@ -119,7 +154,9 @@ fn copy_one(
     de: Option<&Entry>,
     trash: &str,
 ) -> Result<(Meta, Meta), OpError> {
-    let dst_real = de.map(|d| d.real.clone()).unwrap_or_else(|| se.real.clone());
+    let dst_real = de
+        .map(|d| d.real.clone())
+        .unwrap_or_else(|| se.real.clone());
     if de.is_some() && !trash.is_empty() {
         dst.remove(&dst_real, trash)?;
     }
@@ -132,11 +169,21 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
     let (le, re) = (c.ls.get(key), c.rs.get(key));
     match a {
         Action::CopyToRight => match (le, copy_one(c.l, le.unwrap(), c.r, re, c.trash)) {
-            (_, Ok((l, r))) => Out::Synced { key: key.into(), l, r, kind: "kopiowanie →" },
+            (_, Ok((l, r))) => Out::Synced {
+                key: key.into(),
+                l,
+                r,
+                kind: "kopiowanie →",
+            },
             (_, Err(e)) => err_out(key, e),
         },
         Action::CopyToLeft => match copy_one(c.r, re.unwrap(), c.l, le, c.trash) {
-            Ok((r, l)) => Out::Synced { key: key.into(), l, r, kind: "kopiowanie ←" },
+            Ok((r, l)) => Out::Synced {
+                key: key.into(),
+                l,
+                r,
+                kind: "kopiowanie ←",
+            },
             Err(e) => err_out(key, e),
         },
         Action::DeleteLeft => match c.l.remove(&le.unwrap().real, c.trash) {
@@ -151,13 +198,24 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
         Action::Conflict { keep_both: true } => {
             let (le, re) = (le.unwrap(), re.unwrap());
             // wersja z prawej trafia na lewą pod nazwą konfliktową, wersja z lewej wygrywa pod oryginalną nazwą
-            let alias = Entry { real: names::conflict_name(&re.real, c.date), meta: re.meta };
-            let src_alias = Entry { real: re.real.clone(), meta: re.meta };
+            let alias = Entry {
+                real: names::conflict_name(&re.real, c.date),
+                meta: re.meta,
+            };
+            let src_alias = Entry {
+                real: re.real.clone(),
+                meta: re.meta,
+            };
             if let Err(e) = c.l.copy_from(c.r, &src_alias.real, &alias.real) {
                 return err_out(key, e);
             }
             match copy_one(c.l, le, c.r, Some(re), c.trash) {
-                Ok((l, r)) => Out::Synced { key: key.into(), l, r, kind: "konflikt: obie wersje" },
+                Ok((l, r)) => Out::Synced {
+                    key: key.into(),
+                    l,
+                    r,
+                    kind: "konflikt: obie wersje",
+                },
                 Err(e) => err_out(key, e),
             }
         }
@@ -165,7 +223,11 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
 }
 
 pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::Result<Report> {
-    let mut rep = Report { started: chrono::Local::now().timestamp(), dry_run: dry, ..Default::default() };
+    let mut rep = Report {
+        started: chrono::Local::now().timestamp(),
+        dry_run: dry,
+        ..Default::default()
+    };
     let (l, r) = (Location::parse(&job.left), Location::parse(&job.right));
     let rules = job.rules();
 
@@ -182,19 +244,26 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
     rep.scanned_left = ll.files.len();
     rep.scanned_right = rl.files.len();
     for c in ll.collisions.iter().chain(rl.collisions.iter()) {
-        rep.errors.push(format!("kolizja nazw (wielkość liter/Unicode): {c}"));
+        rep.errors
+            .push(format!("kolizja nazw (wielkość liter/Unicode): {c}"));
     }
 
     let db = open_db(state_dir)?;
     let (bl, br) = load_base(&db, &job.id)?;
-    let tree = |m: &BTreeMap<String, Entry>| m.iter().map(|(k, e)| (k.clone(), e.meta)).collect::<Tree>();
+    let tree =
+        |m: &BTreeMap<String, Entry>| m.iter().map(|(k, e)| (k.clone(), e.meta)).collect::<Tree>();
     let (lt, rt) = (tree(&ll.files), tree(&rl.files));
     let actions = plan(&lt, &rt, &bl, &br, job.options());
-    rep.planned = actions.iter().map(|(k, a)| (k.clone(), a.clone())).collect();
+    rep.planned = actions
+        .iter()
+        .map(|(k, a)| (k.clone(), a.clone()))
+        .collect();
 
     if !force {
         if (lt.is_empty() && !bl.is_empty()) || (rt.is_empty() && !br.is_empty()) {
-            rep.blocked = Some("jedna ze stron jest pusta, choć wcześniej były tam pliki (odpięty dysk?)".into());
+            rep.blocked = Some(
+                "jedna ze stron jest pusta, choć wcześniej były tam pliki (odpięty dysk?)".into(),
+            );
         } else if mass_delete_guard(&actions, lt.len().max(rt.len()), job.guard_pct as usize) {
             rep.blocked = Some(format!("plan usuwa ponad {}% plików", job.guard_pct));
         }
@@ -204,11 +273,27 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
     }
 
     let now = chrono::Local::now();
-    let trash = if job.trash_days > 0 { now.format("%Y-%m-%d_%H%M%S").to_string() } else { String::new() };
+    let trash = if job.trash_days > 0 {
+        now.format("%Y-%m-%d_%H%M%S").to_string()
+    } else {
+        String::new()
+    };
     let date = now.format("%Y-%m-%d").to_string();
-    let ctx = Ctx { l: &l, r: &r, ls: &ll.files, rs: &rl.files, trash: &trash, date: &date };
+    let ctx = Ctx {
+        l: &l,
+        r: &r,
+        ls: &ll.files,
+        rs: &rl.files,
+        trash: &trash,
+        date: &date,
+    };
 
-    let queue = Mutex::new(actions.iter().map(|(k, a)| (k.clone(), a.clone())).collect::<Vec<_>>());
+    let queue = Mutex::new(
+        actions
+            .iter()
+            .map(|(k, a)| (k.clone(), a.clone()))
+            .collect::<Vec<_>>(),
+    );
     let results = Mutex::new(Vec::new());
     std::thread::scope(|s| {
         for _ in 0..job.threads.clamp(1, 16) {
@@ -241,7 +326,10 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
             }
             Out::Removed { key } => {
                 rep.deleted += 1;
-                tx.execute("DELETE FROM base WHERE job=?1 AND key=?2", params![job.id, key])?;
+                tx.execute(
+                    "DELETE FROM base WHERE job=?1 AND key=?2",
+                    params![job.id, key],
+                )?;
                 hist("usunięcie", &key, "")?;
             }
             Out::Conflict(p) => {
@@ -259,7 +347,8 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
         }
     }
     // pliki zgodne po obu stronach bez działań: odśwież migawkę; brak po obu stronach: usuń wpis
-    let keys: std::collections::BTreeSet<&String> = lt.keys().chain(rt.keys()).chain(bl.keys()).collect();
+    let keys: std::collections::BTreeSet<&String> =
+        lt.keys().chain(rt.keys()).chain(bl.keys()).collect();
     for k in keys {
         if actions.contains_key(k) {
             continue;
@@ -272,7 +361,10 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
                 )?;
             }
             (None, None) => {
-                tx.execute("DELETE FROM base WHERE job=?1 AND key=?2", params![job.id, k])?;
+                tx.execute(
+                    "DELETE FROM base WHERE job=?1 AND key=?2",
+                    params![job.id, k],
+                )?;
             }
             _ => {}
         }

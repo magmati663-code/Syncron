@@ -11,9 +11,18 @@ fn job(l: &Path, r: &Path, mode: &str) -> Job {
     .unwrap()
 }
 
-fn setup() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+fn setup() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
     let t = tempfile::tempdir().unwrap();
-    let (l, r, s) = (t.path().join("L"), t.path().join("R"), t.path().join("state"));
+    let (l, r, s) = (
+        t.path().join("L"),
+        t.path().join("R"),
+        t.path().join("state"),
+    );
     fs::create_dir_all(&l).unwrap();
     fs::create_dir_all(&r).unwrap();
     (t, l, r, s)
@@ -32,7 +41,10 @@ fn polish_names_two_way() {
     let j = job(&l, &r, "TwoWay");
     let rep = run_job(&j, &s, false, false).unwrap();
     assert_eq!(rep.copied, 2, "{rep:?}");
-    assert_eq!(fs::read_to_string(r.join("Zażółć/gęślą jaźń.txt")).unwrap(), "a");
+    assert_eq!(
+        fs::read_to_string(r.join("Zażółć/gęślą jaźń.txt")).unwrap(),
+        "a"
+    );
     assert_eq!(fs::read_to_string(l.join("Łódź.txt")).unwrap(), "bbb");
     // drugi przebieg: nic do zrobienia
     let rep = run_job(&j, &s, false, false).unwrap();
@@ -116,7 +128,13 @@ fn guard_blocks_empty_source_and_mass_delete() {
     }
     let rep = run_job(&j, &s, false, false).unwrap();
     assert!(rep.blocked.is_some(), "{rep:?}");
-    assert_eq!(fs::read_dir(&r).unwrap().filter(|e| e.as_ref().unwrap().path().is_file()).count(), 8);
+    assert_eq!(
+        fs::read_dir(&r)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().is_file())
+            .count(),
+        8
+    );
     // opróżnienie źródła
     for i in 4..8 {
         fs::remove_file(l.join(format!("f{i}.txt"))).unwrap();
@@ -138,7 +156,10 @@ fn conflict_keep_both() {
     set_mtime(&r.join("a.txt"), 1_900_000_100);
     run_job(&j, &s, false, false).unwrap();
     assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "lewy");
-    let names: Vec<String> = fs::read_dir(&l).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let names: Vec<String> = fs::read_dir(&l)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     assert!(names.iter().any(|n| n.contains("konflikt")), "{names:?}");
 }
 

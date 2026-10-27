@@ -1,0 +1,53 @@
+name: Wydanie (instalatory Windows i macOS)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: "", rclone: windows-amd64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, rclone: osx-arm64 }
+          - { os: macos-13, target: x86_64-apple-darwin, rclone: osx-amd64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: rclone (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://downloads.rclone.org/rclone-current-windows-amd64.zip" -OutFile r.zip
+          Expand-Archive r.zip -DestinationPath rc
+          Copy-Item (Get-ChildItem rc -Recurse -Filter rclone.exe | Select-Object -First 1).FullName app/src-tauri/bin/rclone.exe
+      - name: rclone (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -fsSL "https://downloads.rclone.org/rclone-current-${{ matrix.rclone }}.zip" -o r.zip
+          unzip -q r.zip -d rc
+          cp "$(find rc -name rclone -type f | head -1)" app/src-tauri/bin/rclone
+          chmod +x app/src-tauri/bin/rclone
+      - name: Zależności Node (Tauri CLI)
+        working-directory: app
+        run: npm install
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: v__VERSION__
+          releaseName: "SyncPolak v__VERSION__"
+          releaseBody: "Instalatory: Windows (.exe/.msi), macOS (.dmg). Aplikacje nie są podpisane: patrz README (instalacja)."
+          releaseDraft: false
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}

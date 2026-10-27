@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SyncPolak</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside>
+  <div class="brand"><span class="logo">⇄</span> SyncPolak</div>
+  <nav>
+    <button data-tab="jobs" class="active">Zadania</button>
+    <button data-tab="activity">Aktywność</button>
+    <button data-tab="accounts">Konta chmurowe</button>
+    <button data-tab="settings">Ustawienia</button>
+  </nav>
+  <div class="grow"></div>
+  <button id="pauseAll" class="ghost">⏸ Wstrzymaj wszystko</button>
+</aside>
+
+<main>
+  <section id="tab-jobs" class="tab active">
+    <header><h1>Zadania synchronizacji</h1><button id="newJob" class="primary">+ Nowe zadanie</button></header>
+    <div id="jobs"></div>
+  </section>
+
+  <section id="tab-activity" class="tab">
+    <header><h1>Aktywność i historia</h1>
+      <select id="histJob"></select></header>
+    <h3>Oczekujące (plik zajęty / błędy)</h3>
+    <div id="pending" class="box"></div>
+    <h3>Historia operacji</h3>
+    <div class="box scroll"><table id="hist"><thead><tr><th>Czas</th><th>Zadanie</th><th>Operacja</th><th>Plik</th><th>Szczegóły</th></tr></thead><tbody></tbody></table></div>
+    <button id="exportCsv" class="ghost">Eksportuj do CSV</button>
+  </section>
+
+  <section id="tab-accounts" class="tab">
+    <header><h1>Konta chmurowe i zdalne</h1></header>
+    <p class="muted">Dodane tutaj konta pojawią się jako lokalizacje w formie <code>nazwa:</code> (np. <code>gdrive:Dokumenty</code>).</p>
+    <div id="remotes" class="box"></div>
+    <h3>Dodaj konto</h3>
+    <div class="box form">
+      <label>Typ
+        <select id="rType">
+          <option value="drive">Google Drive</option>
+          <option value="onedrive">OneDrive / SharePoint</option>
+          <option value="bitrix">Bitrix24 Dysk (WebDAV)</option>
+          <option value="webdav">WebDAV / Nextcloud</option>
+          <option value="sftp">SFTP</option>
+        </select></label>
+      <label>Nazwa konta <input id="rName" placeholder="np. gdrive"></label>
+      <div id="rFields"></div>
+      <div class="row"><button id="rAdd" class="primary">Połącz konto</button><span id="rMsg" class="muted"></span></div>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="tab">
+    <header><h1>Ustawienia</h1></header>
+    <div class="box form">
+      <label class="check"><input type="checkbox" id="autostart"> Uruchamiaj SyncPolak razem z systemem (w tle)</label>
+      <p class="muted">Zamknięcie okna chowa aplikację do zasobnika systemowego — synchronizacja działa dalej. Zakończ z menu ikony.</p>
+      <p>Silnik chmur: <code id="rcv">…</code></p>
+    </div>
+  </section>
+</main>
+
+<dialog id="editor">
+  <form method="dialog" id="jobForm">
+    <h2 id="edTitle">Zadanie</h2>
+    <div class="grid">
+      <label class="span2">Nazwa <input name="name" required></label>
+      <div class="loc">
+        <label>Lewa lokalizacja <input name="left" required placeholder="C:\Dane lub gdrive:Folder"></label>
+        <div class="row"><button type="button" data-pick="left">Wybierz folder…</button><select data-remote="left"><option value="">Konto chmurowe…</option></select></div>
+      </div>
+      <div class="loc">
+        <label>Prawa lokalizacja <input name="right" required placeholder="\\serwer\udział lub onedrive:"></label>
+        <div class="row"><button type="button" data-pick="right">Wybierz folder…</button><select data-remote="right"><option value="">Konto chmurowe…</option></select></div>
+      </div>
+      <label>Kierunek
+        <select name="mode">
+          <option value="TwoWay">⇄ Dwustronna</option>
+          <option value="LeftToRight">→ Lewa do prawej</option>
+          <option value="RightToLeft">← Prawa do lewej</option>
+        </select></label>
+      <label>Konflikty (zmiana po obu stronach)
+        <select name="conflict">
+          <option value="Newer">Nowszy wygrywa</option>
+          <option value="Larger">Większy wygrywa</option>
+          <option value="LeftWins">Lewa strona wygrywa</option>
+          <option value="RightWins">Prawa strona wygrywa</option>
+          <option value="KeepBoth">Zachowaj obie wersje</option>
+          <option value="Ask">Pomiń i pokaż w aktywności</option>
+        </select></label>
+      <fieldset class="span2"><legend>Usuwanie i nadpisywanie</legend>
+        <label class="check"><input type="checkbox" name="no_delete_left"> Nie usuwaj po lewej stronie</label>
+        <label class="check"><input type="checkbox" name="no_delete_right"> Nie usuwaj po prawej stronie</label>
+        <label class="check"><input type="checkbox" name="only_add"> Tylko dodawaj nowe pliki (bez nadpisywania i usuwania)</label>
+      </fieldset>
+      <label>Uwzględnij tylko (maski, jedna na linię)<textarea name="include" rows="3" placeholder="*.docx&#10;faktury/*"></textarea></label>
+      <label>Wyklucz (maski, jedna na linię)<textarea name="exclude" rows="3" placeholder="*.log&#10;node_modules/*"></textarea></label>
+      <label>Min. rozmiar (MB) <input name="min_mb" type="number" min="0" step="any"></label>
+      <label>Maks. rozmiar (MB) <input name="max_mb" type="number" min="0" step="any"></label>
+      <label>Harmonogram
+        <select name="sched">
+          <option value="Realtime">Na bieżąco (zmiany od razu)</option>
+          <option value="Interval">Co określony czas</option>
+          <option value="Daily">Codziennie o godzinie</option>
+          <option value="Manual">Tylko ręcznie</option>
+        </select></label>
+      <label id="schedVal">Wartość <input name="sched_val"></label>
+      <label>Okno czasowe: od godziny <input name="win_from" type="number" min="0" max="23" placeholder="np. 22"></label>
+      <label>do godziny <input name="win_to" type="number" min="0" max="23" placeholder="np. 6"></label>
+      <label>Kosz synchronizacji (dni, 0 = bez kosza) <input name="trash_days" type="number" min="0" value="30"></label>
+      <label>Blokada masowego usuwania (% plików) <input name="guard_pct" type="number" min="1" max="100" value="25"></label>
+      <label>Równoległe transfery <input name="threads" type="number" min="1" max="16" value="4"></label>
+      <label class="check"><input type="checkbox" name="enabled" checked> Zadanie włączone</label>
+    </div>
+    <p id="edErr" class="err"></p>
+    <div class="row end"><button type="button" id="edCancel">Anuluj</button><button type="submit" class="primary">Zapisz</button></div>
+  </form>
+</dialog>
+
+<dialog id="report"><h2 id="repTitle"></h2><div id="repBody" class="scroll"></div>
+  <div class="row end"><button id="repClose">Zamknij</button></div></dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

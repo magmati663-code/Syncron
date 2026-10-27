@@ -42,7 +42,9 @@ pub enum Action {
     DeleteLeft,
     DeleteRight,
     /// Konflikt: `keep_both` zachowuje obie wersje, w przeciwnym razie czeka na użytkownika.
-    Conflict { keep_both: bool },
+    Conflict {
+        keep_both: bool,
+    },
 }
 
 pub type Tree = BTreeMap<String, Meta>;
@@ -69,7 +71,13 @@ fn modified(x: Option<&Meta>, base: Option<&Meta>) -> bool {
 }
 
 fn resolve(l: &Meta, r: &Meta, c: Conflict) -> Action {
-    let pick = |left: bool| if left { Action::CopyToRight } else { Action::CopyToLeft };
+    let pick = |left: bool| {
+        if left {
+            Action::CopyToRight
+        } else {
+            Action::CopyToLeft
+        }
+    };
     match c {
         Conflict::Newer if l.mtime != r.mtime => pick(l.mtime > r.mtime),
         Conflict::Larger if l.size != r.size => pick(l.size > r.size),
@@ -81,8 +89,19 @@ fn resolve(l: &Meta, r: &Meta, c: Conflict) -> Action {
 }
 
 /// Zwraca działania (tylko ścieżki wymagające pracy). Klucze powinny być znormalizowane (names::key).
-pub fn plan(left: &Tree, right: &Tree, bl: &Tree, br: &Tree, o: Options) -> BTreeMap<String, Action> {
-    let paths: BTreeSet<&String> = left.keys().chain(right.keys()).chain(bl.keys()).chain(br.keys()).collect();
+pub fn plan(
+    left: &Tree,
+    right: &Tree,
+    bl: &Tree,
+    br: &Tree,
+    o: Options,
+) -> BTreeMap<String, Action> {
+    let paths: BTreeSet<&String> = left
+        .keys()
+        .chain(right.keys())
+        .chain(bl.keys())
+        .chain(br.keys())
+        .collect();
     let mut out = BTreeMap::new();
     for p in paths {
         let (l, r) = (left.get(p), right.get(p));
@@ -103,7 +122,13 @@ pub fn plan(left: &Tree, right: &Tree, bl: &Tree, br: &Tree, o: Options) -> BTre
     out
 }
 
-fn decide(l: Option<&Meta>, r: Option<&Meta>, bl: Option<&Meta>, br: Option<&Meta>, o: &Options) -> Option<Action> {
+fn decide(
+    l: Option<&Meta>,
+    r: Option<&Meta>,
+    bl: Option<&Meta>,
+    br: Option<&Meta>,
+    o: &Options,
+) -> Option<Action> {
     if let (Some(x), Some(y)) = (l, r) {
         if same(x, y) {
             return None;
@@ -169,7 +194,13 @@ mod tests {
         v.iter().map(|(k, x)| (k.to_string(), *x)).collect()
     }
     fn opts(mode: Mode) -> Options {
-        Options { mode, no_delete_left: false, no_delete_right: false, only_add: false, conflict: Conflict::Newer }
+        Options {
+            mode,
+            no_delete_left: false,
+            no_delete_right: false,
+            only_add: false,
+            conflict: Conflict::Newer,
+        }
     }
     fn e() -> Tree {
         Tree::new()
@@ -204,7 +235,10 @@ mod tests {
         let b = tree(&[("a", m(1, 10))]);
         let l = tree(&[("a", m(2, 100))]);
         let r = tree(&[("a", m(3, 50))]);
-        assert_eq!(plan(&l, &r, &b, &b, opts(Mode::TwoWay))["a"], Action::CopyToRight);
+        assert_eq!(
+            plan(&l, &r, &b, &b, opts(Mode::TwoWay))["a"],
+            Action::CopyToRight
+        );
     }
 
     #[test]
@@ -225,7 +259,10 @@ mod tests {
     #[test]
     fn one_way_mirror_and_no_delete() {
         let r = tree(&[("x", m(1, 1))]);
-        assert_eq!(plan(&e(), &r, &e(), &e(), opts(Mode::LeftToRight))["x"], Action::DeleteRight);
+        assert_eq!(
+            plan(&e(), &r, &e(), &e(), opts(Mode::LeftToRight))["x"],
+            Action::DeleteRight
+        );
         let mut o = opts(Mode::LeftToRight);
         o.no_delete_right = true;
         assert!(plan(&e(), &r, &e(), &e(), o).is_empty());

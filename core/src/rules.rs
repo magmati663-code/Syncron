@@ -24,7 +24,11 @@ pub struct RuleSet {
 
 impl Default for RuleSet {
     fn default() -> Self {
-        Self { include: vec![], exclude: vec![], skip_temp: true }
+        Self {
+            include: vec![],
+            exclude: vec![],
+            skip_temp: true,
+        }
     }
 }
 
@@ -72,7 +76,10 @@ impl RuleSet {
 mod tests {
     use super::*;
     fn f(p: &str, s: u64) -> FileInfo {
-        FileInfo { path: p.into(), size: s }
+        FileInfo {
+            path: p.into(),
+            size: s,
+        }
     }
 
     #[test]
@@ -84,7 +91,10 @@ mod tests {
 
     #[test]
     fn rules() {
-        let rs = RuleSet { exclude: vec![Rule::Glob("*.log".into()), Rule::MaxSize(10)], ..Default::default() };
+        let rs = RuleSet {
+            exclude: vec![Rule::Glob("*.log".into()), Rule::MaxSize(10)],
+            ..Default::default()
+        };
         assert!(!rs.allows(&f("a/b.log", 1)));
         assert!(!rs.allows(&f("a/~$x.docx", 1)));
         assert!(rs.allows(&f("a/zażółć.txt", 11)));
