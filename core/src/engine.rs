@@ -1,9 +1,9 @@
 //! Silnik: skan obu stron, planowanie, wykonanie równoległe, zapis stanu (SQLite) i historii.
+use crate::location::Opts;
 use crate::location::{Entry, Location, OpError};
 use crate::model::Job;
 use crate::names;
 use crate::plan::{mass_delete_guard, plan, same, Action, Meta, Tree};
-use crate::vss::Vss;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -140,7 +140,7 @@ struct Ctx<'a> {
     rs: &'a BTreeMap<String, Entry>,
     trash: &'a str, // pusty = bez kosza
     date: &'a str,
-    vss: &'a Vss,
+    o: &'a Opts,
 }
 
 fn err_out(key: &str, e: OpError) -> Out {
@@ -157,7 +157,7 @@ fn copy_one(
     dst: &Location,
     de: Option<&Entry>,
     trash: &str,
-    vss: &Vss,
+    o: &Opts,
 ) -> Result<(Meta, Meta), OpError> {
     let dst_real = de
         .map(|d| d.real.clone())
@@ -166,7 +166,7 @@ fn copy_one(
         // kopia zapasowa starej wersji do kosza (nie przenosimy: nieudane kopiowanie nie może zostawić celu bez pliku)
         dst.backup(&dst_real, trash)?;
     }
-    dst.copy_from(src, &se.real, &dst_real, vss)?;
+    dst.copy_from(src, &se.real, &dst_real, o)?;
     let dm = dst.stat(&dst_real).unwrap_or(se.meta);
     Ok((se.meta, dm))
 }
@@ -174,7 +174,7 @@ fn copy_one(
 fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
     let (le, re) = (c.ls.get(key), c.rs.get(key));
     match a {
-        Action::CopyToRight => match (le, copy_one(c.l, le.unwrap(), c.r, re, c.trash, c.vss)) {
+        Action::CopyToRight => match (le, copy_one(c.l, le.unwrap(), c.r, re, c.trash, c.o)) {
             (_, Ok((l, r))) => Out::Synced {
                 key: key.into(),
                 l,
@@ -183,7 +183,7 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
             },
             (_, Err(e)) => err_out(key, e),
         },
-        Action::CopyToLeft => match copy_one(c.r, re.unwrap(), c.l, le, c.trash, c.vss) {
+        Action::CopyToLeft => match copy_one(c.r, re.unwrap(), c.l, le, c.trash, c.o) {
             Ok((r, l)) => Out::Synced {
                 key: key.into(),
                 l,
@@ -212,10 +212,10 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
                 real: re.real.clone(),
                 meta: re.meta,
             };
-            if let Err(e) = c.l.copy_from(c.r, &src_alias.real, &alias.real, c.vss) {
+            if let Err(e) = c.l.copy_from(c.r, &src_alias.real, &alias.real, c.o) {
                 return err_out(key, e);
             }
-            match copy_one(c.l, le, c.r, Some(re), c.trash, c.vss) {
+            match copy_one(c.l, le, c.r, Some(re), c.trash, c.o) {
                 Ok((l, r)) => Out::Synced {
                     key: key.into(),
                     l,
@@ -298,7 +298,7 @@ pub fn run_job_with(
         String::new()
     };
     let date = now.format("%Y-%m-%d").to_string();
-    let vss = Vss::new(job.use_vss);
+    let opts = Opts::new(job.use_vss, job.verify);
     let ctx = Ctx {
         l: &l,
         r: &r,
@@ -306,7 +306,7 @@ pub fn run_job_with(
         rs: &rl.files,
         trash: &trash,
         date: &date,
-        vss: &vss,
+        o: &opts,
     };
 
     let total = actions.len();
@@ -399,10 +399,10 @@ pub fn run_job_with(
     tx.execute("DELETE FROM history WHERE ts < ?1", [ts - 90 * 86400])?;
     tx.commit()?;
 
-    rep.vss_note = vss.note();
+    rep.vss_note = opts.vss.note();
     if job.trash_days > 0 {
-        l.purge_trash(job.trash_days);
-        r.purge_trash(job.trash_days);
+        l.purge_trash(job.trash_days, job.max_versions);
+        r.purge_trash(job.trash_days, job.max_versions);
     }
     Ok(rep)
 }
@@ -425,16 +425,16 @@ pub fn resolve_conflict(
         (Some(a), Some(b)) => (a, b),
         _ => anyhow::bail!("plik nie istnieje już po obu stronach"),
     };
-    let vss = Vss::new(job.use_vss);
+    let opts = Opts::new(job.use_vss, job.verify);
     let trash = if job.trash_days > 0 {
         chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string()
     } else {
         String::new()
     };
     let (lm, rm) = if left_wins {
-        copy_one(&l, le, &r, Some(re), &trash, &vss).map_err(|e| anyhow::anyhow!(e.to_string()))?
+        copy_one(&l, le, &r, Some(re), &trash, &opts).map_err(|e| anyhow::anyhow!(e.to_string()))?
     } else {
-        let (b, a) = copy_one(&r, re, &l, Some(le), &trash, &vss)
+        let (b, a) = copy_one(&r, re, &l, Some(le), &trash, &opts)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         (a, b)
     };
@@ -455,4 +455,65 @@ pub fn resolve_conflict(
         params![chrono::Local::now().timestamp(), job.id, path, if left_wins { "wygrała lewa strona" } else { "wygrała prawa strona" }],
     )?;
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrashItem {
+    /// "left" | "right"
+    pub side: String,
+    pub stamp: String,
+    pub path: String,
+    pub size: u64,
+}
+
+fn side_loc(job: &Job, side: &str) -> Location {
+    Location::parse(if side == "left" {
+        &job.left
+    } else {
+        &job.right
+    })
+}
+
+/// Kosz i wersje plików obu stron zadania (strona niedostępna jest pomijana, o ile druga działa).
+pub fn trash_list(job: &Job) -> anyhow::Result<Vec<TrashItem>> {
+    let (mut out, mut errs) = (Vec::new(), Vec::new());
+    for side in ["left", "right"] {
+        match side_loc(job, side).list_trash() {
+            Ok(v) => out.extend(v.into_iter().map(|(stamp, path, size)| TrashItem {
+                side: side.into(),
+                stamp,
+                path,
+                size,
+            })),
+            Err(e) => errs.push(format!("{side}: {e}")),
+        }
+    }
+    if out.is_empty() && errs.len() == 2 {
+        anyhow::bail!(errs.join("; "));
+    }
+    Ok(out)
+}
+
+pub fn trash_restore(job: &Job, side: &str, stamp: &str, path: &str) -> anyhow::Result<String> {
+    side_loc(job, side)
+        .restore_trash(stamp, path)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
+}
+
+pub fn trash_delete(
+    job: &Job,
+    side: &str,
+    stamp: Option<&str>,
+    path: Option<&str>,
+) -> anyhow::Result<()> {
+    side_loc(job, side)
+        .delete_trash(stamp, path)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
+}
+
+/// Podfoldery wskazanego folderu jednej ze stron (wybór podfolderów w kreatorze).
+pub fn list_dirs(job_left: &str, rel: &str) -> anyhow::Result<Vec<String>> {
+    Location::parse(job_left)
+        .list_dirs(rel)
+        .map_err(anyhow::Error::msg)
 }

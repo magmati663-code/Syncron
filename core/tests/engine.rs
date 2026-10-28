@@ -232,3 +232,82 @@ fn overwritten_file_is_backed_up_to_trash() {
         .path();
     assert_eq!(fs::read_to_string(day.join("a.txt")).unwrap(), "stara");
 }
+
+#[test]
+fn trash_list_restore_and_delete() {
+    use syncpolak_core::engine::{trash_delete, trash_list, trash_restore};
+    let (_t, l, r, s) = setup();
+    fs::create_dir_all(l.join("Zażółć")).unwrap();
+    fs::write(l.join("Zażółć/a.txt"), "v1").unwrap();
+    let j = job(&l, &r, "LeftToRight");
+    run_job(&j, &s, false, false).unwrap();
+    fs::write(l.join("Zażółć/a.txt"), "wersja 2").unwrap();
+    set_mtime(&l.join("Zażółć/a.txt"), 2_000_000_000);
+    run_job(&j, &s, false, false).unwrap();
+    let items = trash_list(&j).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (items[0].side.as_str(), items[0].path.as_str()),
+        ("right", "Zażółć/a.txt")
+    );
+    // przywrócenie obok istniejącego pliku: osobna nazwa
+    let to = trash_restore(&j, "right", &items[0].stamp, &items[0].path).unwrap();
+    assert!(to.contains("przywrócono"), "{to}");
+    assert_eq!(fs::read_to_string(r.join(&to)).unwrap(), "v1");
+    trash_delete(&j, "right", None, None).unwrap();
+    assert!(trash_list(&j).unwrap().is_empty());
+}
+
+#[test]
+fn trash_can_be_disabled() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join("a.txt"), "1").unwrap();
+    let mut j = job(&l, &r, "LeftToRight");
+    j.trash_days = 0;
+    run_job(&j, &s, false, false).unwrap();
+    fs::write(l.join("a.txt"), "nowe").unwrap();
+    set_mtime(&l.join("a.txt"), 2_000_000_000);
+    run_job(&j, &s, false, false).unwrap();
+    assert!(
+        !r.join(".syncpolak-trash").exists(),
+        "przy wyłączonym koszu nic nie jest odkładane"
+    );
+}
+
+#[test]
+fn versions_are_capped() {
+    use syncpolak_core::location::Location;
+    let (_t, l, r, _s) = setup();
+    let loc = Location::parse(r.to_str().unwrap());
+    for (i, stamp) in [
+        "2026-01-01_000000",
+        "2026-01-02_000000",
+        "2026-01-03_000000",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let d = r.join(".syncpolak-trash").join(stamp);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("a.txt"), format!("v{i}")).unwrap();
+    }
+    let _ = l;
+    loc.purge_trash(0, 2);
+    let left: Vec<_> = loc.list_trash().unwrap().into_iter().map(|t| t.0).collect();
+    assert_eq!(left, vec!["2026-01-02_000000", "2026-01-03_000000"]);
+}
+
+#[test]
+fn verify_checksum_and_list_dirs() {
+    let (_t, l, r, s) = setup();
+    fs::create_dir_all(l.join("Łódź")).unwrap();
+    fs::create_dir_all(l.join("Archiwum")).unwrap();
+    fs::write(l.join("Łódź/duży.bin"), vec![7u8; 3_000_000]).unwrap();
+    let mut j = job(&l, &r, "LeftToRight");
+    j.verify = true;
+    let rep = run_job(&j, &s, false, false).unwrap();
+    assert_eq!(rep.copied, 1, "{rep:?}");
+    assert_eq!(fs::read(r.join("Łódź/duży.bin")).unwrap().len(), 3_000_000);
+    let dirs = syncpolak_core::engine::list_dirs(l.to_str().unwrap(), "").unwrap();
+    assert_eq!(dirs, vec!["Archiwum", "Łódź"]);
+}

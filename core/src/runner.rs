@@ -1,4 +1,5 @@
 //! Uruchamianie zadań: watcher zdarzeń z debouncingiem, polling, interwały, harmonogram dzienny, okna czasowe, ponowienia.
+use crate::conditions;
 use crate::engine::{run_job_with, Report};
 use crate::location::{Location, TRASH_DIR};
 use crate::model::{Job, Schedule};
@@ -15,7 +16,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 enum Msg {
-    RunNow { force: bool },
+    /// Zdarzenie systemowe: "drive" (z nazwą woluminu), "wake", "network".
+    Trigger {
+        kind: String,
+        vol: Option<String>,
+    },
+    RunNow {
+        force: bool,
+    },
     FsEvent,
     Stop,
 }
@@ -30,6 +38,8 @@ pub struct Progress {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
     pub progress: Option<Progress>,
+    /// Dodatkowa informacja (np. czemu zadanie czeka na warunki).
+    pub note: Option<String>,
     /// idle | running | waiting (pliki zajęte, ponowienie) | error | blocked | paused | disabled
     pub state: String,
     pub last_run: Option<i64>,
@@ -164,6 +174,50 @@ impl Runner {
         f()
     }
 
+    /// Rozsyła zdarzenie systemowe do wszystkich zadań (każde samo sprawdza, czy je interesuje).
+    pub fn trigger(&self, kind: &str, vol: Option<&str>) {
+        for h in self.inner.handles.lock().unwrap().values() {
+            let _ = h.tx.send(Msg::Trigger {
+                kind: kind.into(),
+                vol: vol.map(String::from),
+            });
+        }
+    }
+
+    /// Uruchamia wątek wykrywający: podłączenie dysku, wybudzenie z uśpienia i zmianę sieci.
+    pub fn start_monitor(&self) {
+        let me = self.clone();
+        let _ = thread::Builder::new()
+            .name("system-monitor".into())
+            .spawn(move || {
+                let mut vols = mounted_volumes();
+                let mut ip = local_ip();
+                let mut last = std::time::SystemTime::now();
+                loop {
+                    thread::sleep(Duration::from_secs(5));
+                    let now = std::time::SystemTime::now();
+                    if now
+                        .duration_since(last)
+                        .map(|d| d > Duration::from_secs(45))
+                        .unwrap_or(false)
+                    {
+                        me.trigger("wake", None);
+                    }
+                    last = now;
+                    let v = mounted_volumes();
+                    for new in v.difference(&vols) {
+                        me.trigger("drive", Some(new));
+                    }
+                    vols = v;
+                    let i = local_ip();
+                    if i != ip && i.is_some() {
+                        me.trigger("network", None);
+                    }
+                    ip = i;
+                }
+            });
+    }
+
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
     }
@@ -220,6 +274,17 @@ fn period(s: &Schedule) -> Option<Duration> {
     }
 }
 
+/// Czy któraś z lokalizacji lokalnych zadania leży na podanym woluminie (litera dysku / punkt montowania).
+fn touches_volume(job: &Job, vol: &str) -> bool {
+    let v = vol.to_lowercase().replace('/', "\\");
+    [&job.left, &job.right].iter().any(|s| {
+        matches!(Location::parse(s), Location::Local(_))
+            && s.to_lowercase()
+                .replace('/', "\\")
+                .starts_with(v.trim_end_matches('\\'))
+    })
+}
+
 fn relevant(p: &Path) -> bool {
     let s = p.to_string_lossy();
     if s.contains(TRASH_DIR) || s.contains(".syncpolak") {
@@ -251,6 +316,41 @@ fn make_watcher(job: &Job, tx: Sender<Msg>) -> Option<notify::RecommendedWatcher
     any.then_some(w)
 }
 
+/// Podłączone woluminy (litery dysków / punkty montowania).
+pub fn mounted_volumes() -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetLogicalDrives() -> u32;
+        }
+        let mask = unsafe { GetLogicalDrives() };
+        for i in 0..26u32 {
+            if mask & (1 << i) != 0 {
+                out.insert(format!("{}:\\", (b'A' + i as u8) as char));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    for dir in ["/Volumes", "/mnt"] {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            out.extend(
+                rd.flatten()
+                    .map(|e| e.path().to_string_lossy().into_owned()),
+            );
+        }
+    }
+    out
+}
+
+/// Lokalny adres IP używany do wyjścia w sieć (nic nie jest wysyłane).
+fn local_ip() -> Option<String> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("8.8.8.8:80").ok()?;
+    Some(s.local_addr().ok()?.ip().to_string())
+}
+
 fn ts_in(d: Duration) -> i64 {
     Local::now().timestamp() + d.as_secs() as i64
 }
@@ -273,12 +373,21 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                 *next = Some(Instant::now() + Duration::from_secs(300));
                 return;
             }
+            if let Err(reason) = conditions::check(&job.conditions) {
+                set_status(&inner, &job.id, |s| {
+                    s.state = "conditions".into();
+                    s.note = Some(reason);
+                });
+                *next = Some(Instant::now() + Duration::from_secs(60));
+                return;
+            }
         }
         let lock = inner.lock_for(&job.id);
         let _guard = lock.lock().unwrap();
         set_status(&inner, &job.id, |s| {
             s.state = "running".into();
             s.progress = None;
+            s.note = None;
         });
         let report = |done: usize, total: usize, cur: &str| {
             set_status(&inner, &job.id, |s| {
@@ -334,6 +443,20 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
         match rx.recv_timeout(wait) {
             Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(Msg::RunNow { force }) => run(force, true, &mut next),
+            Ok(Msg::Trigger { kind, vol }) => {
+                let want = match kind.as_str() {
+                    "wake" => job.triggers.on_wake,
+                    "network" => job.triggers.on_network,
+                    "drive" => {
+                        job.triggers.on_drive && vol.is_some_and(|v| touches_volume(&job, &v))
+                    }
+                    _ => false,
+                };
+                if want {
+                    thread::sleep(Duration::from_secs(3)); // dysk/sieć potrzebują chwili na ustabilizowanie
+                    run(false, false, &mut next);
+                }
+            }
             Ok(Msg::FsEvent) => {
                 // debouncing: czekaj, aż zdarzenia ucichną (maks. 10 s)
                 let start = Instant::now();
@@ -342,7 +465,7 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                         Ok(Msg::FsEvent) if start.elapsed() < Duration::from_secs(10) => continue,
                         Ok(Msg::FsEvent) | Err(RecvTimeoutError::Timeout) => break,
                         Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-                        Ok(Msg::RunNow { .. }) => break,
+                        Ok(Msg::RunNow { .. }) | Ok(Msg::Trigger { .. }) => break,
                     }
                 }
                 run(false, false, &mut next);
@@ -360,6 +483,17 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn volume_matching() {
+        let j: Job = serde_json::from_value(serde_json::json!({
+            "id":"v","name":"v","left":"E:\\Dane","right":"gdrive:x","mode":"TwoWay","conflict":"Newer","schedule":{"type":"Manual"}
+        }))
+        .unwrap();
+        assert!(touches_volume(&j, "E:\\"));
+        assert!(touches_volume(&j, "e:/"));
+        assert!(!touches_volume(&j, "F:\\"));
+    }
 
     #[test]
     fn daily_is_in_future() {

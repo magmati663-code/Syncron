@@ -62,6 +62,22 @@ fn is_busy(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::PermissionDenied || e.kind() == io::ErrorKind::Interrupted
 }
 
+/// Opcje kopiowania w ramach jednego przebiegu.
+pub struct Opts {
+    pub vss: Vss,
+    /// Po zapisie porównaj sumę kontrolną BLAKE3 źródła i pliku docelowego.
+    pub verify: bool,
+}
+
+impl Opts {
+    pub fn new(use_vss: bool, verify: bool) -> Self {
+        Opts {
+            vss: Vss::new(use_vss),
+            verify,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Location {
     Local(PathBuf),
@@ -137,7 +153,11 @@ impl Location {
             Location::Local(p) => meta_of(&fs::metadata(local_full(p, rel)).ok()?),
             Location::Rclone(_) => {
                 let out = run_rclone(&["lsjson", "--no-mimetype", &self.full(rel)]).ok()?;
-                parse_lsjson(&out).ok()?.into_iter().next().map(|(_, m)| m)
+                parse_lsjson(&out, true)
+                    .ok()?
+                    .into_iter()
+                    .next()
+                    .map(|(_, m)| m)
             }
         }
     }
@@ -148,7 +168,7 @@ impl Location {
         from: &Location,
         from_rel: &str,
         to_rel: &str,
-        vss: &Vss,
+        o: &Opts,
     ) -> Result<(), OpError> {
         match (from, self) {
             (Location::Local(a), Location::Local(b)) => {
@@ -158,12 +178,12 @@ impl Location {
                     if delay > 0 {
                         sleep(Duration::from_millis(delay));
                     }
-                    match copy_local(&src, &dst) {
+                    match copy_local(&src, &dst, o.verify) {
                         Ok(()) => return Ok(()),
                         Err(e) if is_busy(&e) => {
                             // plik zablokowany przez inny program: odczyt z migawki VSS (Windows, administrator)
-                            if let Ok(snap) = vss.snapshot_path(&src) {
-                                match copy_local(&snap, &dst) {
+                            if let Ok(snap) = o.vss.snapshot_path(&src) {
+                                match copy_local(&snap, &dst, o.verify) {
                                     Ok(()) => return Ok(()),
                                     Err(e2) => last = Some(e2),
                                 }
@@ -175,7 +195,7 @@ impl Location {
                     }
                 }
                 let msg = last.map(|e| e.to_string()).unwrap_or_default();
-                Err(OpError::Busy(match vss.note() {
+                Err(OpError::Busy(match o.vss.note() {
                     Some(n) => format!("{msg}; {n}"),
                     None => msg,
                 }))
@@ -193,7 +213,8 @@ impl Location {
                     let src = local_full(a, from_rel);
                     if let Err(e) = open_shared(&src) {
                         if is_busy(&e) {
-                            let snap = vss
+                            let snap = o
+                                .vss
                                 .snapshot_path(&src)
                                 .map_err(|n| OpError::Busy(format!("{e}; {n}")))?;
                             static N: AtomicUsize = AtomicUsize::new(0);
@@ -202,7 +223,7 @@ impl Location {
                                 std::process::id(),
                                 N.fetch_add(1, Ordering::SeqCst)
                             ));
-                            copy_local(&snap, &t)?;
+                            copy_local(&snap, &t, false)?;
                             source = t.to_string_lossy().into_owned();
                             temp = Some(t);
                         }
@@ -258,9 +279,164 @@ impl Location {
         }
     }
 
+    /// Elementy kosza: (znacznik czasu przebiegu, ścieżka pliku, rozmiar).
+    pub fn list_trash(&self) -> Result<Vec<(String, String, u64)>, String> {
+        let mut out = Vec::new();
+        match self {
+            Location::Local(p) => {
+                let root = local_full(p, TRASH_DIR);
+                let Ok(rd) = fs::read_dir(&root) else {
+                    return Ok(out);
+                };
+                for st in rd.flatten() {
+                    let stamp = st.file_name().to_string_lossy().into_owned();
+                    let mut stack = vec![(st.path(), String::new())];
+                    while let Some((dir, rel)) = stack.pop() {
+                        for e in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+                            let n = e.file_name().to_string_lossy().into_owned();
+                            let r = if rel.is_empty() {
+                                n
+                            } else {
+                                format!("{rel}/{n}")
+                            };
+                            match e.file_type() {
+                                Ok(t) if t.is_dir() => stack.push((e.path(), r)),
+                                Ok(t) if t.is_file() => out.push((
+                                    stamp.clone(),
+                                    r,
+                                    e.metadata().map(|m| m.len()).unwrap_or(0),
+                                )),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            Location::Rclone(_) => {
+                let base = self.full(TRASH_DIR);
+                let raw =
+                    match run_rclone(&["lsjson", "-R", "--files-only", "--no-mimetype", &base]) {
+                        Ok(s) => s,
+                        Err(e) if e.to_lowercase().contains("directory not found") => {
+                            return Ok(out)
+                        }
+                        Err(e) => return Err(e),
+                    };
+                for (path, m) in parse_lsjson(&raw, false)? {
+                    if let Some((stamp, rel)) = path.split_once('/') {
+                        out.push((stamp.to_string(), rel.to_string(), m.size));
+                    }
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// Przywraca plik z kosza na pierwotne miejsce; jeśli tam jest już plik, przywraca pod nazwą z dopiskiem.
+    pub fn restore_trash(&self, stamp: &str, rel: &str) -> Result<String, OpError> {
+        let from_rel = format!("{TRASH_DIR}/{stamp}/{rel}");
+        let target = if self.stat(rel).is_some() {
+            names::conflict_name(rel, &format!("przywrócono {stamp}"))
+        } else {
+            rel.to_string()
+        };
+        match self {
+            Location::Local(p) => {
+                let dst = local_full(p, &target);
+                if let Some(parent) = dst.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(local_full(p, &from_rel), dst)?;
+            }
+            Location::Rclone(_) => {
+                rclone_op(&["copyto", &self.full(&from_rel), &self.full(&target)])?
+            }
+        }
+        Ok(target)
+    }
+
+    /// Usuwa trwale z kosza: jeden plik (`stamp`+`rel`), cały przebieg (`stamp`) albo wszystko.
+    pub fn delete_trash(&self, stamp: Option<&str>, rel: Option<&str>) -> Result<(), OpError> {
+        let target = match (stamp, rel) {
+            (Some(s), Some(r)) => format!("{TRASH_DIR}/{s}/{r}"),
+            (Some(s), None) => format!("{TRASH_DIR}/{s}"),
+            _ => TRASH_DIR.to_string(),
+        };
+        let file = stamp.is_some() && rel.is_some();
+        match self {
+            Location::Local(p) => {
+                let t = local_full(p, &target);
+                if !t.exists() {
+                    return Ok(());
+                }
+                if file {
+                    Ok(fs::remove_file(t)?)
+                } else {
+                    Ok(fs::remove_dir_all(t)?)
+                }
+            }
+            Location::Rclone(_) => {
+                if file {
+                    rclone_op(&["deletefile", &self.full(&target)])
+                } else {
+                    rclone_op(&["purge", &self.full(&target)])
+                }
+            }
+        }
+    }
+
+    /// Podfoldery (jeden poziom) wskazanego folderu: do wyboru podfolderów w kreatorze.
+    pub fn list_dirs(&self, rel: &str) -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        match self {
+            Location::Local(p) => {
+                let dir = local_full(p, rel);
+                for e in fs::read_dir(&dir)
+                    .map_err(|e| format!("{}: {e}", dir.display()))?
+                    .flatten()
+                {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if n != TRASH_DIR && e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        out.push(n);
+                    }
+                }
+            }
+            Location::Rclone(_) => {
+                let raw = run_rclone(&["lsjson", "--dirs-only", "--no-mimetype", &self.full(rel)])?;
+                let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+                for it in v.as_array().into_iter().flatten() {
+                    if let Some(n) = it["Name"].as_str().filter(|n| *n != TRASH_DIR) {
+                        out.push(n.to_string());
+                    }
+                }
+            }
+        }
+        out.sort_by_key(|n| n.to_lowercase());
+        Ok(out)
+    }
+
     /// Usuwa z kosza lokalnego foldery starsze niż `days` dni (nazwa: `YYYY-MM-DD_HHMMSS`).
-    pub fn purge_trash(&self, days: u32) {
+    pub fn purge_trash(&self, days: u32, max_versions: u32) {
+        if let Location::Rclone(_) = self {
+            if days > 0 {
+                let _ = run_rclone(&[
+                    "delete",
+                    &self.full(TRASH_DIR),
+                    "--min-age",
+                    &format!("{days}d"),
+                    "--rmdirs",
+                ]);
+            }
+            return;
+        }
         if let Location::Local(p) = self {
+            if max_versions > 0 {
+                self.cap_versions(max_versions as usize);
+            }
+            if days == 0 {
+                return;
+            }
             let dir = local_full(p, TRASH_DIR);
             let limit = chrono::Local::now() - chrono::Duration::days(days as i64);
             let limit = limit.format("%Y-%m-%d").to_string();
@@ -270,6 +446,32 @@ impl Location {
                     if n.len() >= 10 && n[..10] < *limit.as_str() {
                         let _ = fs::remove_dir_all(e.path());
                     }
+                }
+            }
+        }
+    }
+}
+
+impl Location {
+    /// Zostawia w koszu lokalnym tylko `keep` najnowszych wersji każdego pliku.
+    fn cap_versions(&self, keep: usize) {
+        let Ok(items) = self.list_trash() else { return };
+        let mut by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (stamp, rel, _) in items {
+            by_file.entry(rel).or_default().push(stamp);
+        }
+        for (rel, mut stamps) in by_file {
+            stamps.sort();
+            let extra = stamps.len().saturating_sub(keep);
+            for st in stamps.into_iter().take(extra) {
+                let _ = self.delete_trash(Some(&st), Some(&rel));
+            }
+        }
+        if let Location::Local(p) = self {
+            // puste foldery przebiegów
+            if let Ok(rd) = fs::read_dir(local_full(p, TRASH_DIR)) {
+                for e in rd.flatten() {
+                    let _ = fs::remove_dir(e.path());
                 }
             }
         }
@@ -370,7 +572,7 @@ fn open_shared(p: &Path) -> io::Result<File> {
     o.open(p)
 }
 
-fn copy_local(src: &Path, dst: &Path) -> io::Result<()> {
+fn copy_local(src: &Path, dst: &Path, verify: bool) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -383,9 +585,32 @@ fn copy_local(src: &Path, dst: &Path) -> io::Result<()> {
     let before = inp.metadata()?;
     let res = (|| {
         let mut out = File::create(&tmp)?;
-        io::copy(&mut inp, &mut out)?;
+        let mut hasher = blake3::Hasher::new();
+        if verify {
+            let mut buf = vec![0u8; 1 << 20];
+            loop {
+                let n = io::Read::read(&mut inp, &mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                io::Write::write_all(&mut out, &buf[..n])?;
+            }
+        } else {
+            io::copy(&mut inp, &mut out)?;
+        }
         out.sync_all()?;
         drop(out);
+        if verify {
+            let mut written = blake3::Hasher::new();
+            io::copy(&mut File::open(&tmp)?, &mut written)?;
+            if written.finalize() != hasher.finalize() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "suma kontrolna zapisanego pliku nie zgadza się ze źródłem",
+                ));
+            }
+        }
         let after = fs::metadata(src)?;
         if after.len() != before.len() || after.modified().ok() != before.modified().ok() {
             return Err(io::Error::new(
@@ -443,7 +668,7 @@ fn rclone_op(args: &[&str]) -> Result<(), OpError> {
     })
 }
 
-fn parse_lsjson(s: &str) -> Result<Vec<(String, Meta)>, String> {
+fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, String> {
     let v: serde_json::Value = serde_json::from_str(s).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for it in v.as_array().ok_or("zła odpowiedź rclone")? {
@@ -456,7 +681,7 @@ fn parse_lsjson(s: &str) -> Result<Vec<(String, Meta)>, String> {
         }
         let path = it["Path"].as_str().unwrap_or("").to_string();
         let name = path.rsplit('/').next().unwrap_or("");
-        if path.starts_with(TRASH_DIR) || names::is_temp(name) {
+        if skip_special && (path.starts_with(TRASH_DIR) || names::is_temp(name)) {
             continue;
         }
         let mtime = it["ModTime"]
@@ -482,7 +707,7 @@ fn parse_lsjson(s: &str) -> Result<Vec<(String, Meta)>, String> {
 
 fn list_rclone(base: &str) -> Result<Vec<(String, Meta)>, String> {
     match run_rclone(&["lsjson", "-R", "--files-only", "--no-mimetype", base]) {
-        Ok(s) => parse_lsjson(&s),
+        Ok(s) => parse_lsjson(&s, true),
         Err(e) if e.to_lowercase().contains("directory not found") => Ok(vec![]),
         Err(e) => Err(e),
     }
@@ -515,7 +740,7 @@ mod tests {
     fn lsjson_parse() {
         let j = r#"[{"Path":"a/zażółć.txt","Size":3,"ModTime":"2026-10-27T10:00:00.123Z","IsDir":false},
                     {"Path":"a","Size":-1,"IsDir":true},{"Path":"~$x.docx","Size":1,"ModTime":"2026-10-27T10:00:00Z","IsDir":false}]"#;
-        let v = parse_lsjson(j).unwrap();
+        let v = parse_lsjson(j, true).unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].0, "a/zażółć.txt");
         assert_eq!(v[0].1.size, 3);

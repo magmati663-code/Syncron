@@ -1,4 +1,5 @@
 //! Silnik SyncPolak: nazwy (Unicode), reguły, planowanie, lokalizacje (lokalne/rclone), silnik i harmonogram.
+pub mod conditions;
 pub mod engine;
 pub mod location;
 pub mod model;

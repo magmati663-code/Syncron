@@ -34,6 +34,31 @@ fn d_threads() -> usize {
     4
 }
 
+/// Warunki uruchamiania zadania.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Conditions {
+    /// Tylko przy zasilaniu sieciowym (nie na baterii).
+    #[serde(default)]
+    pub ac_only: bool,
+    /// Dozwolone nazwy sieci Wi-Fi (puste = dowolna).
+    #[serde(default)]
+    pub wifi: Vec<String>,
+}
+
+/// Dodatkowe wyzwalacze uruchamiania (poza harmonogramem).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Triggers {
+    /// Po podłączeniu dysku (zewnętrznego/sieciowego), na którym leży jedna z lokalizacji.
+    #[serde(default)]
+    pub on_drive: bool,
+    /// Po wybudzeniu komputera z uśpienia.
+    #[serde(default)]
+    pub on_wake: bool,
+    /// Po zmianie sieci (adresu IP).
+    #[serde(default)]
+    pub on_network: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
@@ -74,6 +99,16 @@ pub struct Job {
     /// Windows: czytaj pliki zablokowane przez inne programy z migawki VSS (wymaga administratora).
     #[serde(default = "d_true")]
     pub use_vss: bool,
+    /// Po kopiowaniu lokalnym porównaj sumę kontrolną (BLAKE3) źródła i zapisanego pliku.
+    #[serde(default)]
+    pub verify: bool,
+    /// Ile poprzednich wersji pliku trzymać w koszu (0 = bez limitu, decyduje retencja w dniach).
+    #[serde(default)]
+    pub max_versions: u32,
+    #[serde(default)]
+    pub conditions: Conditions,
+    #[serde(default)]
+    pub triggers: Triggers,
 }
 
 impl Job {
