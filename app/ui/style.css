@@ -163,3 +163,4 @@ dialog::backdrop{background:rgba(10,15,30,.55);backdrop-filter:blur(2px)}
 @media (max-width:900px){.route{grid-template-columns:1fr}.dir{transform:rotate(90deg)}.g2,.choice{grid-template-columns:1fr}aside{width:70px}.brand span:last-child,nav button span.l,.ver,.side-foot .l{display:none}}
 #cfYes.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 #cfYes.danger:hover{color:#fff;filter:brightness(1.1)}
+[hidden]{display:none!important}

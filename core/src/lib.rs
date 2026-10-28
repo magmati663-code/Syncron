@@ -6,3 +6,4 @@ pub mod names;
 pub mod plan;
 pub mod rules;
 pub mod runner;
+pub mod vss;

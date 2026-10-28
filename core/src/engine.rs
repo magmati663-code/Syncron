@@ -3,6 +3,7 @@ use crate::location::{Entry, Location, OpError};
 use crate::model::Job;
 use crate::names;
 use crate::plan::{mass_delete_guard, plan, same, Action, Meta, Tree};
+use crate::vss::Vss;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,6 +26,8 @@ pub struct Report {
     pub planned: Vec<(String, Action)>,
     /// Powód zatrzymania przez zabezpieczenia.
     pub blocked: Option<String>,
+    /// Dlaczego VSS nie zadziałał (np. brak uprawnień administratora).
+    pub vss_note: Option<String>,
 }
 
 impl Report {
@@ -137,6 +140,7 @@ struct Ctx<'a> {
     rs: &'a BTreeMap<String, Entry>,
     trash: &'a str, // pusty = bez kosza
     date: &'a str,
+    vss: &'a Vss,
 }
 
 fn err_out(key: &str, e: OpError) -> Out {
@@ -153,14 +157,16 @@ fn copy_one(
     dst: &Location,
     de: Option<&Entry>,
     trash: &str,
+    vss: &Vss,
 ) -> Result<(Meta, Meta), OpError> {
     let dst_real = de
         .map(|d| d.real.clone())
         .unwrap_or_else(|| se.real.clone());
     if de.is_some() && !trash.is_empty() {
-        dst.remove(&dst_real, trash)?;
+        // kopia zapasowa starej wersji do kosza (nie przenosimy: nieudane kopiowanie nie może zostawić celu bez pliku)
+        dst.backup(&dst_real, trash)?;
     }
-    dst.copy_from(src, &se.real, &dst_real)?;
+    dst.copy_from(src, &se.real, &dst_real, vss)?;
     let dm = dst.stat(&dst_real).unwrap_or(se.meta);
     Ok((se.meta, dm))
 }
@@ -168,7 +174,7 @@ fn copy_one(
 fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
     let (le, re) = (c.ls.get(key), c.rs.get(key));
     match a {
-        Action::CopyToRight => match (le, copy_one(c.l, le.unwrap(), c.r, re, c.trash)) {
+        Action::CopyToRight => match (le, copy_one(c.l, le.unwrap(), c.r, re, c.trash, c.vss)) {
             (_, Ok((l, r))) => Out::Synced {
                 key: key.into(),
                 l,
@@ -177,7 +183,7 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
             },
             (_, Err(e)) => err_out(key, e),
         },
-        Action::CopyToLeft => match copy_one(c.r, re.unwrap(), c.l, le, c.trash) {
+        Action::CopyToLeft => match copy_one(c.r, re.unwrap(), c.l, le, c.trash, c.vss) {
             Ok((r, l)) => Out::Synced {
                 key: key.into(),
                 l,
@@ -206,10 +212,10 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
                 real: re.real.clone(),
                 meta: re.meta,
             };
-            if let Err(e) = c.l.copy_from(c.r, &src_alias.real, &alias.real) {
+            if let Err(e) = c.l.copy_from(c.r, &src_alias.real, &alias.real, c.vss) {
                 return err_out(key, e);
             }
-            match copy_one(c.l, le, c.r, Some(re), c.trash) {
+            match copy_one(c.l, le, c.r, Some(re), c.trash, c.vss) {
                 Ok((l, r)) => Out::Synced {
                     key: key.into(),
                     l,
@@ -292,6 +298,7 @@ pub fn run_job_with(
         String::new()
     };
     let date = now.format("%Y-%m-%d").to_string();
+    let vss = Vss::new(job.use_vss);
     let ctx = Ctx {
         l: &l,
         r: &r,
@@ -299,6 +306,7 @@ pub fn run_job_with(
         rs: &rl.files,
         trash: &trash,
         date: &date,
+        vss: &vss,
     };
 
     let total = actions.len();
@@ -391,6 +399,7 @@ pub fn run_job_with(
     tx.execute("DELETE FROM history WHERE ts < ?1", [ts - 90 * 86400])?;
     tx.commit()?;
 
+    rep.vss_note = vss.note();
     if job.trash_days > 0 {
         l.purge_trash(job.trash_days);
         r.purge_trash(job.trash_days);
@@ -416,16 +425,17 @@ pub fn resolve_conflict(
         (Some(a), Some(b)) => (a, b),
         _ => anyhow::bail!("plik nie istnieje już po obu stronach"),
     };
+    let vss = Vss::new(job.use_vss);
     let trash = if job.trash_days > 0 {
         chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string()
     } else {
         String::new()
     };
     let (lm, rm) = if left_wins {
-        copy_one(&l, le, &r, Some(re), &trash).map_err(|e| anyhow::anyhow!(e.to_string()))?
+        copy_one(&l, le, &r, Some(re), &trash, &vss).map_err(|e| anyhow::anyhow!(e.to_string()))?
     } else {
-        let (b, a) =
-            copy_one(&r, re, &l, Some(le), &trash).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let (b, a) = copy_one(&r, re, &l, Some(le), &trash, &vss)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         (a, b)
     };
     let db = open_db(state_dir)?;

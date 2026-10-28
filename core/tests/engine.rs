@@ -213,3 +213,22 @@ fn progress_is_reported() {
         .unwrap();
     assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 5);
 }
+
+#[test]
+fn overwritten_file_is_backed_up_to_trash() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join("a.txt"), "stara").unwrap();
+    let j = job(&l, &r, "LeftToRight");
+    run_job(&j, &s, false, false).unwrap();
+    fs::write(l.join("a.txt"), "nowa wersja").unwrap();
+    set_mtime(&l.join("a.txt"), 2_000_000_000);
+    run_job(&j, &s, false, false).unwrap();
+    assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "nowa wersja");
+    let day = fs::read_dir(r.join(".syncpolak-trash"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(fs::read_to_string(day.join("a.txt")).unwrap(), "stara");
+}

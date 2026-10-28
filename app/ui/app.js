@@ -142,7 +142,7 @@ function renderJobs() {
     let stats = st.last_run ? `Ostatnio ${rel(st.last_run)}` : "Jeszcze nie uruchomione";
     if (rep) stats += ` · skopiowano ${rep.copied}, usunięto ${rep.deleted}`;
     if (st.next_run && state !== "disabled") stats += ` · następne ${new Date(st.next_run * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}`;
-    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", j.trash_days > 0 && `kosz ${j.trash_days} dni`, (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
+    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", j.trash_days > 0 && `kosz ${j.trash_days} dni`, vssInfo.supported && j.use_vss !== false && "VSS", (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
     let extra = "";
     if (state === "running") {
       const pct = pr && pr.total ? Math.round((pr.done / pr.total) * 100) : null;
@@ -150,7 +150,7 @@ function renderJobs() {
     }
     if (st.error) extra += `<div class="msg">${esc(st.error)}</div>`;
     else if (rep?.blocked) extra += `<div class="msg warn"><b>Zatrzymano ze względów bezpieczeństwa:</b> ${esc(rep.blocked)}. Sprawdź „Symulację”; „Wymuś” pominie blokadę.</div>`;
-    else if (rep?.busy.length) extra += `<div class="msg warn">${rep.busy.length} plik(ów) jest zajętych przez inne programy — ponowię automatycznie.</div>`;
+    else if (rep?.busy.length) extra += `<div class="msg warn">${rep.busy.length} plik(ów) jest zajętych przez inne programy — ponowię automatycznie.${rep.vss_note ? `<br><b>VSS:</b> ${esc(rep.vss_note)}` : ""}</div>`;
     else if (rep?.conflicts.length) extra += `<div class="msg warn">${rep.conflicts.length} konflikt(ów) czeka na decyzję w zakładce „Aktywność”.</div>`;
     const loc = (side, p) => `<div class="loc"><div class="ic">${icon(locKind(p))}</div><div class="t"><b>${side}</b><span title="${esc(p)}">${esc(p)}</span></div></div>`;
     return `<div class="card s-${state}" data-id="${esc(j.id)}">
@@ -205,7 +205,8 @@ $("#repClose").onclick = () => $("#report").close();
 const F = () => $("#jobForm").elements;
 const STEP_NAMES = ["Krok 1 z 4 · Lokalizacje", "Krok 2 z 4 · Kierunek i usuwanie", "Krok 3 z 4 · Filtry plików", "Krok 4 z 4 · Harmonogram i podsumowanie"];
 let step = 0;
-const DEFAULT_JOB = { id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
+let vssInfo = { supported: false, admin: false, elevated_autostart: false };
+const DEFAULT_JOB = { use_vss: true, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
 
 function openEditor(job, tpl) {
   const f = F(); $("#edErr").textContent = "";
@@ -218,7 +219,7 @@ function openEditor(job, tpl) {
   f.sched.value = j.schedule.type;
   f.sched_val.value = j.schedule.type === "Interval" ? Math.round(j.schedule.secs / 60) : j.schedule.type === "Daily" ? `${String(j.schedule.hour).padStart(2, "0")}:${String(j.schedule.minute).padStart(2, "0")}` : j.schedule.type === "Realtime" ? Math.round(j.schedule.poll_secs / 60) : "";
   f.win_from.value = j.window ? j.window[0] : ""; f.win_to.value = j.window ? j.window[1] : "";
-  f.trash_days.value = j.trash_days; f.guard_pct.value = j.guard_pct; f.threads.value = j.threads; f.enabled.checked = j.enabled;
+  f.trash_days.value = j.trash_days; f.guard_pct.value = j.guard_pct; f.threads.value = j.threads; f.enabled.checked = j.enabled; f.use_vss.checked = j.use_vss !== false; $("#vssRow").hidden = !vssInfo.supported;
   $("#jobForm").dataset.id = j.id || "";
   $$("[data-hint]").forEach((h) => (h.textContent = ""));
   schedHint(); showStep(0); $("#editor").showModal(); f.name.focus();
@@ -257,7 +258,7 @@ function readJob() {
     min_size: f.min_mb.value === "" ? null : Math.round(Number(f.min_mb.value) * 1048576),
     max_size: f.max_mb.value === "" ? null : Math.round(Number(f.max_mb.value) * 1048576),
     schedule, window: from !== null && to !== null ? [from, to] : null, enabled: f.enabled.checked,
-    guard_pct: Number(f.guard_pct.value) || 25, trash_days: Number(f.trash_days.value) || 0, threads: Number(f.threads.value) || 4,
+    guard_pct: Number(f.guard_pct.value) || 25, trash_days: Number(f.trash_days.value) || 0, threads: Number(f.threads.value) || 4, use_vss: f.use_vss.checked,
   };
 }
 function summarize(j) {
@@ -329,7 +330,7 @@ function renderPending() {
   for (const j of jobs) {
     const st = overview.status[j.id], r = st?.last; if (!r) continue;
     r.conflicts.forEach((p) => out.push(`<tr><td><span class="kind warn">konflikt</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted">zmieniono po obu stronach</td><td style="white-space:nowrap"><button class="sm" data-res="left" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj lewą</button> <button class="sm" data-res="right" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj prawą</button></td></tr>`));
-    r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString("pl-PL") + ")" : ""}</td></tr>`));
+    r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${r.vss_note ? ` · VSS: ${esc(r.vss_note)}` : ""}${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString("pl-PL") + ")" : ""}</td></tr>`));
     r.errors.forEach((p) => out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(p)}</td></tr>`));
     if (st.error) out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(st.error)}</td></tr>`);
   }
@@ -397,6 +398,23 @@ $("#pauseAll").onclick = async () => { await invoke("set_paused", { paused: !ove
   $("#autostart").onchange = async (e) => { try { e.target.checked ? await autostart.enable() : await autostart.disable(); } catch (err) { toast(String(err), "bad"); } };
   try { $("#rcv").textContent = await invoke("rclone_version"); } catch { $("#rcv").textContent = "niedostępny (foldery lokalne i dyski sieciowe działają; chmury wymagają rclone)"; }
 })();
+async function loadVss() {
+  try { vssInfo = await invoke("vss_status"); } catch {}
+  $("#vssBox").hidden = !vssInfo.supported;
+  if (!vssInfo.supported) return;
+  $("#vssState").textContent = vssInfo.admin ? "✓ Działasz jako administrator — pliki zablokowane przez inne programy będą kopiowane z migawki VSS." : "Brak uprawnień administratora — zablokowane pliki będą ponawiane, ale VSS nie zadziała.";
+  $("#vssElevate").hidden = vssInfo.admin;
+  $("#vssAutoRow").hidden = !vssInfo.admin; $("#vssAuto").checked = vssInfo.elevated_autostart;
+}
+$("#vssElevate").onclick = async () => {
+  if (!(await ask("Uruchomić ponownie jako administrator?", "Windows poprosi o potwierdzenie (UAC). Synchronizacja zostanie na chwilę zatrzymana.", "Uruchom ponownie"))) return;
+  try { await invoke("restart_elevated"); } catch (e) { toast(String(e), "bad"); }
+};
+$("#vssAuto").onchange = async (e) => {
+  try { await invoke("set_elevated_autostart", { enable: e.target.checked }); if (e.target.checked) { try { await autostart.disable(); $("#autostart").checked = false; } catch {} } toast("Zapisano", "ok"); }
+  catch (er) { e.target.checked = !e.target.checked; toast(String(er), "bad"); }
+};
 hydrateIcons();
+loadVss();
 loadRemotes(); refreshJobs().then(refreshStatus);
 setInterval(refreshStatus, 2000);

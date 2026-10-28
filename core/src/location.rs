@@ -2,11 +2,13 @@
 use crate::names;
 use crate::plan::Meta;
 use crate::rules::{FileInfo, RuleSet};
+use crate::vss::Vss;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -141,7 +143,13 @@ impl Location {
     }
 
     /// Kopiuje plik `from_rel` z `from` do `self` jako `to_rel` (zapis atomowy, ponowienia dla plików zajętych).
-    pub fn copy_from(&self, from: &Location, from_rel: &str, to_rel: &str) -> Result<(), OpError> {
+    pub fn copy_from(
+        &self,
+        from: &Location,
+        from_rel: &str,
+        to_rel: &str,
+        vss: &Vss,
+    ) -> Result<(), OpError> {
         match (from, self) {
             (Location::Local(a), Location::Local(b)) => {
                 let (src, dst) = (local_full(a, from_rel), local_full(b, to_rel));
@@ -152,13 +160,25 @@ impl Location {
                     }
                     match copy_local(&src, &dst) {
                         Ok(()) => return Ok(()),
-                        Err(e) if is_busy(&e) => last = Some(e),
+                        Err(e) if is_busy(&e) => {
+                            // plik zablokowany przez inny program: odczyt z migawki VSS (Windows, administrator)
+                            if let Ok(snap) = vss.snapshot_path(&src) {
+                                match copy_local(&snap, &dst) {
+                                    Ok(()) => return Ok(()),
+                                    Err(e2) => last = Some(e2),
+                                }
+                            } else {
+                                last = Some(e);
+                            }
+                        }
                         Err(e) => return Err(e.into()),
                     }
                 }
-                Err(OpError::Busy(
-                    last.map(|e| e.to_string()).unwrap_or_default(),
-                ))
+                let msg = last.map(|e| e.to_string()).unwrap_or_default();
+                Err(OpError::Busy(match vss.note() {
+                    Some(n) => format!("{msg}; {n}"),
+                    None => msg,
+                }))
             }
             _ => {
                 if let Location::Local(b) = self {
@@ -166,8 +186,50 @@ impl Location {
                         fs::create_dir_all(parent)?;
                     }
                 }
-                rclone_op(&["copyto", &from.full(from_rel), &self.full(to_rel)])
+                // lokalne źródło zablokowane przez inny program: rclone dostaje kopię z migawki VSS
+                let mut source = from.full(from_rel);
+                let mut temp = None;
+                if let Location::Local(a) = from {
+                    let src = local_full(a, from_rel);
+                    if let Err(e) = open_shared(&src) {
+                        if is_busy(&e) {
+                            let snap = vss
+                                .snapshot_path(&src)
+                                .map_err(|n| OpError::Busy(format!("{e}; {n}")))?;
+                            static N: AtomicUsize = AtomicUsize::new(0);
+                            let t = std::env::temp_dir().join("syncpolak-vss").join(format!(
+                                "{}-{}",
+                                std::process::id(),
+                                N.fetch_add(1, Ordering::SeqCst)
+                            ));
+                            copy_local(&snap, &t)?;
+                            source = t.to_string_lossy().into_owned();
+                            temp = Some(t);
+                        }
+                    }
+                }
+                let res = rclone_op(&["copyto", &source, &self.full(to_rel)]);
+                if let Some(t) = temp {
+                    let _ = fs::remove_file(t);
+                }
+                res
             }
+        }
+    }
+
+    /// Kopiuje plik do kosza synchronizacji (przed nadpisaniem).
+    pub fn backup(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
+        let trash_rel = format!("{TRASH_DIR}/{stamp}/{rel}");
+        match self {
+            Location::Local(p) => {
+                let dst = local_full(p, &trash_rel);
+                if let Some(parent) = dst.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(local_full(p, rel), dst)?;
+                Ok(())
+            }
+            Location::Rclone(_) => rclone_op(&["copyto", &self.full(rel), &self.full(&trash_rel)]),
         }
     }
 

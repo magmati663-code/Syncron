@@ -17,6 +17,9 @@ Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
 - Konflikty: nowszy / większy / lewa / prawa / zachowaj obie wersje / pomiń i pokaż.
 - Zmiany wykrywane od razu (ReadDirectoryChangesW / FSEvents) z debouncingiem, plus polling dla dysków sieciowych i chmur,
   skan startowy nadrabiający zmiany z czasu, gdy aplikacja była wyłączona.
+- **VSS (Windows):** plik zablokowany wyłącznie przez inny program (Outlook, bazy danych…) jest kopiowany z migawki woluminu.
+  Wymaga uprawnień administratora: w Ustawieniach → VSS „Uruchom ponownie jako administrator” (UAC) oraz opcjonalny autostart
+  z najwyższymi uprawnieniami. Bez administratora plik trafia do kolejki ponowień, a w aplikacji widać powód.
 - Pliki otwarte w innych programach: czytane we współdzielonym trybie (Windows), zapis atomowy (plik tymczasowy → rename),
   kontrola zmiany w trakcie kopiowania, kolejka ponowień z backoffem, zajęty plik nie blokuje reszty.
 - Polskie znaki: porównanie po NFC (macOS/NFD), kolizje wielkości liter, nazwy zastrzeżone Windows, długie ścieżki `\\?\`.

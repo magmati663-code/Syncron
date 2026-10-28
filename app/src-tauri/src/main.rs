@@ -6,6 +6,7 @@ use syncpolak_core::engine::{self, HistoryRow, Report};
 use syncpolak_core::location::run_rclone;
 use syncpolak_core::model::Job;
 use syncpolak_core::runner::{Runner, Status};
+use syncpolak_core::vss;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State, WindowEvent};
@@ -246,6 +247,48 @@ async fn test_remote(name: String) -> Res<String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+struct VssStatus {
+    supported: bool,
+    admin: bool,
+    elevated_autostart: bool,
+}
+
+#[tauri::command]
+async fn vss_status() -> VssStatus {
+    tauri::async_runtime::spawn_blocking(|| VssStatus {
+        supported: vss::supported(),
+        admin: vss::is_admin(),
+        elevated_autostart: vss::elevated_autostart_enabled(),
+    })
+    .await
+    .unwrap_or(VssStatus {
+        supported: false,
+        admin: false,
+        elevated_autostart: false,
+    })
+}
+
+/// Uruchamia aplikację ponownie jako administrator (monit UAC) i zamyka bieżącą instancję.
+#[tauri::command]
+async fn restart_elevated(app: tauri::AppHandle) -> Res<()> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || vss::restart_elevated(&exe))
+        .await
+        .map_err(|e| e.to_string())??;
+    app.state::<Runner>().stop_all();
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_elevated_autostart(enable: bool) -> Res<()> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || vss::set_elevated_autostart(&exe, enable))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn rclone_version() -> Res<String> {
     run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string())
@@ -291,6 +334,7 @@ fn main() {
             // własna konfiguracja rclone w folderze danych aplikacji
             std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
             locate_rclone(app.handle());
+            vss::cleanup_stale(); // migawki pozostawione po awarii
             let runner = Runner::new(dir);
             runner.start_all();
             app.manage(runner);
@@ -357,7 +401,10 @@ fn main() {
             add_remote,
             delete_remote,
             test_remote,
-            rclone_version
+            rclone_version,
+            vss_status,
+            restart_elevated,
+            set_elevated_autostart
         ])
         .run(tauri::generate_context!())
         .expect("błąd uruchamiania SyncPolak");

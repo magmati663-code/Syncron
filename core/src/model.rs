@@ -71,6 +71,9 @@ pub struct Job {
     pub trash_days: u32,
     #[serde(default = "d_threads")]
     pub threads: usize,
+    /// Windows: czytaj pliki zablokowane przez inne programy z migawki VSS (wymaga administratora).
+    #[serde(default = "d_true")]
+    pub use_vss: bool,
 }
 
 impl Job {

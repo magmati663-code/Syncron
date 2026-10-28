@@ -18,7 +18,7 @@
   <div class="grow"></div>
   <div class="side-foot">
     <button id="pauseAll" class="ghost"><span data-i="pause"></span><span class="l" id="pauseTxt">Wstrzymaj wszystko</span></button>
-    <div class="ver">SyncPolak 0.2</div>
+    <div class="ver">SyncPolak 0.3</div>
   </div>
 </aside>
 
@@ -68,6 +68,12 @@
         </div></div>
       <label class="sw"><input type="checkbox" id="autostart"><span>Uruchamiaj razem z systemem<small>Aplikacja startuje w tle, w zasobniku systemowym.</small></span></label>
       <p class="muted">Zamknięcie okna chowa aplikację do zasobnika — synchronizacja działa dalej. Zakończ z menu ikony w zasobniku.</p>
+      <div id="vssBox" hidden>
+        <b>VSS (Windows): pliki zablokowane przez inne programy</b>
+        <p class="muted" id="vssState"></p>
+        <div class="pick"><button type="button" id="vssElevate" class="primary" hidden>Uruchom ponownie jako administrator</button></div>
+        <label class="sw" id="vssAutoRow" hidden><input type="checkbox" id="vssAuto"><span>Uruchamiaj przy logowaniu jako administrator<small>Tworzy zadanie harmonogramu Windows z najwyższymi uprawnieniami (zastępuje zwykły autostart).</small></span></label>
+      </div>
       <p>Silnik chmur: <code id="rcv">…</code></p>
     </div>
   </section>
@@ -138,6 +144,7 @@
           <label>Równoległe transfery<input name="threads" type="number" min="1" max="16"></label>
           <label class="sw" style="margin-top:18px"><input type="checkbox" name="enabled"><span>Zadanie włączone</span></label>
         </div>
+        <label class="sw" id="vssRow" hidden><input type="checkbox" name="use_vss"><span>Czytaj pliki zablokowane przez inne programy z migawki VSS<small>Windows: gdy plik jest otwarty wyłącznie w innym programie (np. Outlook, baza danych), SyncPolak skopiuje jego spójny obraz z kopii woluminu. Wymaga uruchomienia jako administrator (Ustawienia → VSS).</small></span></label>
         <div class="summary" id="summary"></div>
       </div>
       <p class="err" id="edErr"></p>
