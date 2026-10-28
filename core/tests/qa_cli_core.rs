@@ -91,7 +91,6 @@ fn legacy_relative_path_without_parent_does_not_panic() {
 }
 
 #[test]
-#[ignore = "BUG T7-19: migracja nadpisuje istniejące w nowym folderze settings.json/rclone.conf/state.db (nowa wersja zdążyła już zapisać ustawienia/konta), jeśli brak jobs.json"]
 fn legacy_does_not_overwrite_existing_files_in_new_dir() {
     let t = tempfile::tempdir().unwrap();
     let (old, new) = old_and_new(t.path());
@@ -113,7 +112,6 @@ fn legacy_does_not_overwrite_existing_files_in_new_dir() {
 }
 
 #[test]
-#[ignore = "BUG T7-20 (do weryfikacji): migracja pomija stary folder z samym rclone.conf (konta bez zadań) – konta chmur przepadają"]
 fn legacy_migrates_accounts_even_without_jobs() {
     let t = tempfile::tempdir().unwrap();
     let (old, new) = old_and_new(t.path());
@@ -150,7 +148,6 @@ fn save_then_load_roundtrip_with_polish_names() {
 }
 
 #[test]
-#[ignore = "BUG T7-02: load_jobs nie odróżnia „brak/uszkodzony plik” od „pusta lista” – kolejny save_jobs nadpisuje uszkodzony plik (utrata zadań); brak kopii .bak"]
 fn save_after_failed_load_does_not_destroy_corrupt_file() {
     let t = tempfile::tempdir().unwrap();
     let r = Runner::new(t.path().to_path_buf());
@@ -168,7 +165,6 @@ fn save_after_failed_load_does_not_destroy_corrupt_file() {
 }
 
 #[test]
-#[ignore = "BUG T7-21: save_jobs używa stałej nazwy jobs.json.tmp – równoległe zapisy (GUI + CLI import + daemon) wzajemnie się psują / rename kończy się błędem NotFound"]
 fn concurrent_save_jobs_never_fails_nor_corrupts() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().to_path_buf();

@@ -250,7 +250,6 @@ fn match_not_found_exit_1() {
 }
 
 #[test]
-#[ignore = "BUG T7-05: find_job nie normalizuje Unicode (NFD z terminala macOS nie pasuje do NFC w nazwie)"]
 fn match_nfd_query_matches_nfc_name() {
     let e = env();
     write_jobs(&e.d, &json!([job("11111111", "Zażółć", &e.l, &e.r)]));
@@ -262,7 +261,6 @@ fn match_nfd_query_matches_nfc_name() {
 }
 
 #[test]
-#[ignore = "BUG T7-04: pusty ciąg jako nazwa pasuje do każdego zadania (run \"\" uruchamia jedyne zadanie)"]
 fn match_empty_query_rejected() {
     let e = env();
     write_jobs(&e.d, &json!([job("11111111", "Jedyne", &e.l, &e.r)]));
@@ -275,7 +273,6 @@ fn match_empty_query_rejected() {
 // ───────────────────────── run: opcje, dry-run, force, kody wyjścia ─────────────────────────
 
 #[test]
-#[ignore = "BUG T7-01: nieznana opcja przy run (np. literówka --dryrun) jest ignorowana i uruchamia PRAWDZIWĄ synchronizację"]
 fn run_unknown_flag_does_not_execute() {
     let e = env();
     write_jobs(&e.d, &json!([job("11111111", "Foto", &e.l, &e.r)]));
@@ -466,7 +463,6 @@ fn import_duplicate_ids_stored_once_last_wins() {
 }
 
 #[test]
-#[ignore = "BUG T7-12: import raportuje liczbę zadań z pliku (2), a po scaleniu duplikatów id zapisano 1"]
 fn import_duplicate_ids_message_count_is_accurate() {
     let e = env();
     let f = e.root.join("dup.json");
@@ -578,7 +574,6 @@ fn import_creates_missing_data_dir_and_leaves_no_tmp() {
 // ───── utrata konfiguracji: uszkodzony / niezgodny jobs.json ─────
 
 #[test]
-#[ignore = "BUG T7-02: import do uszkodzonego jobs.json nadpisuje go (load_jobs=pusta lista) – bezpowrotna utrata zadań"]
 fn import_into_corrupt_jobs_json_does_not_destroy_it() {
     let e = env();
     let corrupt = r#"[{"id":"a","name":"Ważne","left":"/x","right":"/y","mode":"TwoWay","conflict":"Newer","schedule":{"type":"Manual"}},{"id":"b","name":"Uciętе"#;
@@ -602,7 +597,6 @@ fn import_into_corrupt_jobs_json_does_not_destroy_it() {
 }
 
 #[test]
-#[ignore = "BUG T7-03: list na uszkodzonym jobs.json mówi „Brak zadań” z kodem 0 zamiast zgłosić błąd"]
 fn list_corrupt_jobs_json_reports_error() {
     let e = env();
     fs::write(e.d.join("jobs.json"), "[{\"id\":\"a\",\"name\":").unwrap();
@@ -611,7 +605,6 @@ fn list_corrupt_jobs_json_reports_error() {
 }
 
 #[test]
-#[ignore = "BUG T7-03: run na uszkodzonym jobs.json zgłasza „nie znaleziono zadania” zamiast błędu pliku"]
 fn run_corrupt_jobs_json_message_mentions_file() {
     let e = env();
     fs::write(e.d.join("jobs.json"), "{{{").unwrap();
@@ -624,7 +617,6 @@ fn run_corrupt_jobs_json_message_mentions_file() {
 }
 
 #[test]
-#[ignore = "BUG T7-03: export z uszkodzonego jobs.json zapisuje „[]” i kończy sukcesem (fałszywa kopia zapasowa)"]
 fn export_corrupt_jobs_json_fails() {
     let e = env();
     fs::write(e.d.join("jobs.json"), "{{{").unwrap();
@@ -634,7 +626,6 @@ fn export_corrupt_jobs_json_fails() {
 }
 
 #[test]
-#[ignore = "BUG T7-06: jobs.json z BOM-em UTF-8 (Notatnik Windows) jest odczytywany jako pusty"]
 fn jobs_json_with_bom_is_read() {
     let e = env();
     let mut b = vec![0xEF, 0xBB, 0xBF];
@@ -648,7 +639,6 @@ fn jobs_json_with_bom_is_read() {
 }
 
 #[test]
-#[ignore = "BUG T7-06: import pliku z BOM-em UTF-8 kończy się błędem „to nie jest plik konfiguracji”"]
 fn import_file_with_bom_works() {
     let e = env();
     let mut b = vec![0xEF, 0xBB, 0xBF];
@@ -664,7 +654,6 @@ fn import_file_with_bom_works() {
 }
 
 #[test]
-#[ignore = "BUG T7-07: jedno zadanie z nieznanym wariantem (np. nowszy tryb z przyszłej wersji) powoduje, że WSZYSTKIE zadania znikają z listy"]
 fn one_bad_job_does_not_hide_the_others() {
     let e = env();
     let mut bad = job("zly", "Z przyszłości", &e.l, &e.r);
@@ -684,7 +673,6 @@ fn utf8_invalid_jobs_json_does_not_panic() {
 // ───── panika / znaki specjalne ─────
 
 #[test]
-#[ignore = "BUG T7-08: list panikuje (kod 101), gdy bajt 8 identyfikatora wypada w środku znaku wielobajtowego (&j.id[..8])"]
 fn list_multibyte_id_does_not_panic() {
     let e = env();
     write_jobs(&e.d, &json!([job("abcdefgą-id", "Foto", &e.l, &e.r)]));
@@ -693,7 +681,6 @@ fn list_multibyte_id_does_not_panic() {
 }
 
 #[test]
-#[ignore = "BUG T7-09 (niska): list wypisuje znaki sterujące z nazwy zadania bez filtrowania (sekwencje ESC terminala)"]
 fn list_escapes_control_chars_in_name() {
     let e = env();
     write_jobs(&e.d, &json!([job("a", "Foto\u{1b}[2J\u{7}", &e.l, &e.r)]));
@@ -713,7 +700,6 @@ fn very_long_name_and_unusual_chars_ok() {
 }
 
 #[test]
-#[ignore = "BUG T7-10 (niska): interwał < 60 s wyświetlany jako „co 0 min”"]
 fn list_interval_below_minute_not_zero_min() {
     let e = env();
     let mut j = job("a", "Foto", &e.l, &e.r);
@@ -722,6 +708,7 @@ fn list_interval_below_minute_not_zero_min() {
     assert!(!out_s(&run(&e.d, &["list"])).contains("co 0 min"));
 }
 
+#[cfg(unix)]
 #[test]
 fn readonly_data_dir_import_reports_error_not_panic() {
     use std::os::unix::fs::PermissionsExt;
@@ -803,7 +790,6 @@ fn default_data_dir_follows_xdg_and_home() {
 }
 
 #[test]
-#[ignore = "BUG T7-11 (niska): puste SYNCRON_DATA=\"\" daje folder danych = bieżący katalog (jobs.json/state.db lądują w cwd)"]
 fn empty_env_var_is_ignored() {
     let e = env();
     let cwd = e.root.join("cwd");
@@ -844,6 +830,7 @@ fn cli_migrates_from_old_sibling_folder() {
 
 // ───────────────────────── pliki usług ─────────────────────────
 
+#[cfg(unix)]
 fn fake_systemctl(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin_dir = dir.join("fakebin");
@@ -861,6 +848,7 @@ fn fake_systemctl(dir: &Path) -> PathBuf {
     bin_dir
 }
 
+#[cfg(unix)]
 fn install_service(e: &Env, data_dir: &str) -> (Output, String) {
     let home = e.root.join("home");
     fs::create_dir_all(&home).unwrap();
@@ -910,7 +898,6 @@ fn service_uninstall_removes_unit() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "BUG T7-13: ścieżka z nową linią we --data-dir wstrzykuje dodatkowe dyrektywy do pliku unit systemd"]
 fn systemd_unit_newline_in_path_cannot_inject_directives() {
     let e = env();
     let evil = format!(
@@ -926,7 +913,6 @@ fn systemd_unit_newline_in_path_cannot_inject_directives() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "BUG T7-14: systemd_unit nie podwaja % ani $ w ExecStart (specyfikatory/zmienne systemd zmieniają ścieżkę)"]
 fn systemd_unit_escapes_percent_and_dollar() {
     let u = cli_src::systemd_unit("/opt/syncron", "/home/x/100%/$HOME/dane");
     assert!(u.contains("100%%") && u.contains("$$HOME"), "{u}");
@@ -934,7 +920,6 @@ fn systemd_unit_escapes_percent_and_dollar() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "BUG T7-14: cudzysłów i backslash w ścieżce nie są escapowane w ExecStart"]
 fn systemd_unit_escapes_quote_and_backslash() {
     let u = cli_src::systemd_unit("/opt/syncron", "/home/x/a\"b\\c");
     assert!(u.contains("a\\\"b\\\\c"), "{u}");
@@ -942,7 +927,6 @@ fn systemd_unit_escapes_quote_and_backslash() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "BUG T7-15: względne --data-dir trafia do pliku usługi bez zamiany na ścieżkę bezwzględną (usługa startuje z innym cwd)"]
 fn service_unit_uses_absolute_data_dir() {
     let e = env();
     let home = e.root.join("home");
@@ -963,7 +947,6 @@ fn service_unit_uses_absolute_data_dir() {
 }
 
 #[test]
-#[ignore = "BUG T7-16: launchd_plist nie escapuje XML (& < > w ścieżce, np. „Tom & Jerry”) – plist nieprawidłowy, launchctl odmówi"]
 fn launchd_plist_escapes_xml() {
     let p = cli_src::launchd_plist("/Users/Tom & Jerry/syncron", "/Users/a<b>/dane");
     assert!(
@@ -1001,7 +984,6 @@ fn service_bad_subcommand_exit_1() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "BUG T7-17 (niska): nieznana opcja przy service install (np. --bot zamiast --boot) jest ignorowana"]
 fn service_install_unknown_flag_rejected() {
     let e = env();
     let home = e.root.join("home");
@@ -1059,6 +1041,7 @@ fn atomic_write_jobs(d: &Path, v: &Value) {
     fs::rename(tmp, d.join("jobs.json")).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn daemon_runs_interval_job_and_dies_cleanly_on_sigterm() {
     let e = env();
@@ -1132,7 +1115,6 @@ fn daemon_reloads_jobs_json_after_atomic_replace() {
 }
 
 #[test]
-#[ignore = "BUG T7-18: daemon po uszkodzeniu jobs.json (ręczna edycja, ucięty zapis) cicho zatrzymuje WSZYSTKIE zadania i nie wraca, dopóki plik się nie zmieni"]
 fn daemon_keeps_running_jobs_when_jobs_json_becomes_corrupt() {
     let e = env();
     write_jobs(&e.d, &json!([interval_job("odstep", &e.l, &e.r)]));
@@ -1202,7 +1184,6 @@ fn parallel_runs_of_same_job_do_not_corrupt_or_panic() {
 }
 
 #[test]
-#[ignore = "BUG T7-21: równoległe importy/zapisy dzielą jobs.json.tmp – losowo kończą się błędem „No such file or directory” (flaky)"]
 fn parallel_import_does_not_lose_jobs_or_error() {
     let e = env();
     let kids: Vec<_> = (0..6)

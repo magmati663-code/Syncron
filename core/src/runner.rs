@@ -9,7 +9,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -72,6 +72,17 @@ impl Inner {
     }
 }
 
+/// Blokada magazynu zadań; zwalnia plik `.lock` przy zniszczeniu.
+struct StoreLock {
+    path: PathBuf,
+    _g: std::sync::MutexGuard<'static, ()>,
+}
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 #[derive(Clone)]
 pub struct Runner {
     state_dir: PathBuf,
@@ -90,19 +101,210 @@ impl Runner {
         self.state_dir.join("jobs.json")
     }
 
+    /// Wczytuje zadania. Brak pliku = pusta lista; błąd odczytu/parsowania = `Err` (po polsku, ze ścieżką).
+    /// Zadania, których nie da się odczytać (np. nieznany `mode` z nowszej wersji), są pomijane,
+    /// ale pozostają w pliku (`save_jobs` zachowuje ich surowy JSON). Uszkodzony plik jest kopiowany
+    /// do `jobs.json.corrupt-<znacznik czasu>`.
+    pub fn load_jobs_checked(&self) -> Result<Vec<Job>, String> {
+        self.load_inner().map(|(jobs, _)| jobs)
+    }
+
+    /// Jak `load_jobs_checked`, ale błąd jest tylko logowany (zwraca pustą listę). Kolejny `save_jobs`
+    /// i tak nie zniszczy uszkodzonego pliku (zostaje kopia `.corrupt-*`).
     pub fn load_jobs(&self) -> Vec<Job> {
-        std::fs::read_to_string(self.jobs_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        match self.load_jobs_checked() {
+            Ok(j) => j,
+            Err(e) => {
+                log::error!("{e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// (zadania, surowe wpisy, których nie udało się odczytać)
+    fn load_inner(&self) -> Result<(Vec<Job>, Vec<serde_json::Value>), String> {
+        let path = self.jobs_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], vec![])),
+            Err(e) => {
+                return Err(format!(
+                    "Nie można odczytać pliku zadań {}: {e}",
+                    path.display()
+                ))
+            }
+        };
+        let bad = |why: String| {
+            let kept = self.backup_corrupt(&bytes);
+            format!(
+                "Plik zadań {} jest uszkodzony ({why}).{}",
+                path.display(),
+                match kept {
+                    Some(k) => format!(" Kopię zachowano w {}.", k.display()),
+                    None => String::new(),
+                }
+            )
+        };
+        let text =
+            std::str::from_utf8(&bytes).map_err(|e| bad(format!("nieprawidłowy UTF-8: {e}")))?;
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let v: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| bad(format!("błąd składni JSON: {e}")))?;
+        let serde_json::Value::Array(items) = v else {
+            return Err(bad("oczekiwano listy zadań".into()));
+        };
+        let (mut jobs, mut unknown) = (Vec::new(), Vec::new());
+        for it in items {
+            match serde_json::from_value::<Job>(it.clone()) {
+                Ok(j) => jobs.push(j),
+                Err(e) => {
+                    log::warn!("Pominięto nieczytelne zadanie w {}: {e}", path.display());
+                    unknown.push(it);
+                }
+            }
+        }
+        Ok((jobs, unknown))
+    }
+
+    /// Zapisuje kopię uszkodzonej zawartości jobs.json (raz dla tej samej treści). Zwraca ścieżkę kopii.
+    fn backup_corrupt(&self, content: &[u8]) -> Option<PathBuf> {
+        if content.iter().all(|b| b.is_ascii_whitespace()) {
+            return None;
+        }
+        let prefix = "jobs.json.corrupt-";
+        if let Ok(rd) = std::fs::read_dir(&self.state_dir) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with(prefix)
+                    && std::fs::read(e.path())
+                        .map(|c| c == content)
+                        .unwrap_or(false)
+                {
+                    return Some(e.path());
+                }
+            }
+        }
+        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        for n in 0..1000 {
+            let name = if n == 0 {
+                format!("{prefix}{ts}")
+            } else {
+                format!("{prefix}{ts}-{n}")
+            };
+            let p = self.state_dir.join(name);
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&p)
+            {
+                use std::io::Write;
+                return f.write_all(content).ok().map(|_| p);
+            }
+        }
+        None
+    }
+
+    /// Blokada zapisu: mutex procesu + plik `jobs.json.lock` (między procesami: GUI, CLI, daemon).
+    fn lock_store(&self) -> Result<StoreLock, String> {
+        static PROC: Mutex<()> = Mutex::new(());
+        let guard = PROC.lock().unwrap_or_else(|e| e.into_inner());
+        std::fs::create_dir_all(&self.state_dir).map_err(|e| {
+            format!(
+                "Nie można utworzyć folderu danych {}: {e}",
+                self.state_dir.display()
+            )
+        })?;
+        let lock = self.state_dir.join("jobs.json.lock");
+        let start = Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+            {
+                Ok(_) => {
+                    return Ok(StoreLock {
+                        path: lock,
+                        _g: guard,
+                    })
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // porzucona blokada (proces zakończył się awaryjnie)
+                    let stale = std::fs::metadata(&lock)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|d| d > Duration::from_secs(30));
+                    if stale {
+                        let _ = std::fs::remove_file(&lock);
+                    } else if start.elapsed() > Duration::from_secs(15) {
+                        return Err(format!(
+                            "Nie można uzyskać blokady {} (inny proces zapisuje zadania).",
+                            lock.display()
+                        ));
+                    } else {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Nie można utworzyć blokady {}: {e}",
+                        lock.display()
+                    ))
+                }
+            }
+        }
+    }
+
+    fn write_locked(&self, jobs: &[Job], unknown: &[serde_json::Value]) -> anyhow::Result<()> {
+        use anyhow::Context;
+        // nieczytelne zadania (np. z nowszej wersji) zostają w pliku, o ile nie zastąpiono ich id
+        let mut all: Vec<serde_json::Value> = jobs
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()?;
+        for u in unknown {
+            let id = u.get("id").and_then(|v| v.as_str());
+            if id.is_none() || !jobs.iter().any(|j| Some(j.id.as_str()) == id) {
+                all.push(u.clone());
+            }
+        }
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let dest = self.jobs_path();
+        let tmp = self.state_dir.join(format!(
+            "jobs.json.tmp-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::SeqCst)
+        ));
+        let r = std::fs::write(&tmp, serde_json::to_string_pretty(&all)?)
+            .with_context(|| format!("Nie można zapisać pliku tymczasowego {}", tmp.display()))
+            .and_then(|_| {
+                std::fs::rename(&tmp, &dest)
+                    .with_context(|| format!("Nie można zastąpić pliku zadań {}", dest.display()))
+            });
+        if r.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        r
     }
 
     pub fn save_jobs(&self, jobs: &[Job]) -> anyhow::Result<()> {
-        std::fs::create_dir_all(&self.state_dir)?;
-        let tmp = self.state_dir.join("jobs.json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(jobs)?)?;
-        std::fs::rename(tmp, self.jobs_path())?;
-        Ok(())
+        let _lock = self.lock_store().map_err(anyhow::Error::msg)?;
+        // uszkodzony plik nie zostaje zniszczony bez śladu: ładowanie robi kopię .corrupt-*
+        let unknown = self.load_inner().map(|(_, u)| u).unwrap_or_default();
+        self.write_locked(jobs, &unknown)
+    }
+
+    /// Odczyt-zmiana-zapis pod blokadą (np. import). Przy uszkodzonym pliku zwraca błąd i niczego nie zapisuje.
+    pub fn update_jobs<F>(&self, f: F) -> Result<Vec<Job>, String>
+    where
+        F: FnOnce(Vec<Job>) -> Result<Vec<Job>, String>,
+    {
+        let _lock = self.lock_store()?;
+        let (jobs, unknown) = self.load_inner()?;
+        let new = f(jobs)?;
+        self.write_locked(&new, &unknown)
+            .map_err(|e| format!("{e:#}"))?;
+        Ok(new)
     }
 
     pub fn start_all(&self) {
