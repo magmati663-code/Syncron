@@ -592,6 +592,8 @@ fn r2_file_vs_directory_clash_no_panic_no_loss() {
     assert!(all.iter().any(|v| v == "plik") && all.iter().any(|v| v == "w-prawa"));
 }
 
+// wymaga systemu plików rozróżniającego wielkość liter (Windows i macOS domyślnie nie)
+#[cfg(target_os = "linux")]
 #[test]
 fn r2_case_collision_same_side_reports_error_no_loss() {
     let env = setup();
