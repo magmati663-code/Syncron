@@ -1,6 +1,6 @@
 // Runda 2: save_job/kreator nie odrzucają zagnieżdżonych lokalizacji (prawa wewnątrz lewej) - silnik kopiuje folder sam do siebie w nieskończoność.
 // Wymaga zbudowanego CLI:  CARGO_TARGET_DIR=/tmp/qa_target cargo build -p syncron-cli
-// Uruchom: SYNCRON_BIN=/tmp/qa_target/debug/syncron node app/ui/qa/r2_nested_locations.js      (FAIL = potwierdzony błąd)
+// Uruchom: SYNCRON_BIN=/tmp/qa_target/debug/syncron node tests/ui-qa/r2_nested_locations.js      (FAIL = potwierdzony błąd)
 const fs = require("fs");
 const os = require("os");
 const path = require("path");

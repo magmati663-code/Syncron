@@ -1,5 +1,5 @@
 // Runda 3: obciążenie i regresja - 500 zadań, 5000 wpisów kosza/historii, odświeżanie 2 s przy otwartym kreatorze, język, motyw ciemny, wąskie okno, kontrast.
-// Uruchom: node app/ui/qa/r3_load.js     (FAIL = potwierdzony błąd/wada; liczby czasów drukowane informacyjnie)
+// Uruchom: node tests/ui-qa/r3_load.js     (FAIL = potwierdzony błąd/wada; liczby czasów drukowane informacyjnie)
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const fs = require("fs");
 const os = require("os");

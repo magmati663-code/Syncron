@@ -1,5 +1,5 @@
 // QA tester 9 — PoC XSS dla UI (NIE ładowany przez aplikację).
-// Uruchomienie z korzenia repo: NODE_PATH=$(npm root -g) node app/ui/qa/xss_poc.js
+// Uruchomienie z korzenia repo: NODE_PATH=$(npm root -g) node tests/ui-qa/xss_poc.js
 // Stub window.__TAURI__ zwraca złośliwe dane (nazwy plików, zadań, kont, błędy) zawierające HTML;
 // sprawdzamy, czy jakikolwiek kod z payloadu się wykonał lub czy powstały obce elementy.
 // Kod wyjścia 0 = brak wykonania payloadu (UI bezpieczne), 1 = XSS.
@@ -45,7 +45,7 @@ const init = `
   pg.on("pageerror", (e) => errs.push(e.message));
   pg.on("dialog", (d) => { errs.push("DIALOG " + d.message()); d.dismiss(); });
   await pg.addInitScript(init);
-  await pg.goto("file://" + path.resolve(__dirname, "../index.html"));
+  await pg.goto("file://" + path.resolve(__dirname, "../../app/ui/index.html"));
   await pg.waitForTimeout(800);
   for (const tab of ["jobs", "activity", "trash", "accounts", "settings"]) {
     await pg.click(`[data-tab=${tab}]`).catch(() => {});

@@ -48,6 +48,32 @@ pub fn is_temp(name: &str) -> bool {
         || matches!(l.as_str(), ".ds_store" | "thumbs.db" | "desktop.ini")
 }
 
+/// Waliduje ścieżkę względną (separator `/`) pochodzącą z zewnątrz (listing zdalny, interfejs, CLI): odrzuca puste
+/// komponenty, `.` i `..`, ścieżki bezwzględne i z literą dysku, a na Windows także `\\`. Zwraca opis błędu po polsku.
+pub fn check_rel(rel: &str) -> Result<(), String> {
+    if rel.is_empty() {
+        return Err("pusta ścieżka".into());
+    }
+    let drive = cfg!(windows)
+        && rel.as_bytes().get(1) == Some(&b':')
+        && rel.as_bytes()[0].is_ascii_alphabetic();
+    if rel.starts_with('/') || rel.starts_with('\\') || drive {
+        return Err(format!("ścieżka bezwzględna niedozwolona: {rel}"));
+    }
+    if cfg!(windows) && rel.contains('\\') {
+        return Err(format!("odwrócony ukośnik niedozwolony: {rel}"));
+    }
+    for part in rel.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(format!("niedozwolony komponent ścieżki w: {rel}"));
+        }
+        if part.chars().any(|c| (c as u32) < 32) {
+            return Err(format!("znak sterujący w ścieżce: {rel:?}"));
+        }
+    }
+    Ok(())
+}
+
 /// Nazwa kopii konfliktowej: `raport.docx` -> `raport (konflikt 2026-10-27).docx`.
 pub fn conflict_name(rel: &str, stamp: &str) -> String {
     let (dir, file) = match rel.rfind('/') {
@@ -84,6 +110,19 @@ mod tests {
         assert!(invalid_on_windows("plik?.txt"));
         assert!(invalid_on_windows("koniec."));
         assert!(!invalid_on_windows("Żółć.docx"));
+    }
+
+    #[test]
+    fn check_rel_rules() {
+        for ok in ["a", "a/b.txt", "zażółć/gęślą jaźń.txt", "a b/c", "..a/b.."] {
+            assert!(check_rel(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "/a", "a//b", "a/../b", "..", "a/.", "a/b/", "x\u{7}y"] {
+            assert!(check_rel(bad).is_err(), "{bad:?}");
+        }
+        if cfg!(windows) {
+            assert!(check_rel("C:/x").is_err() && check_rel("a\\b").is_err());
+        }
     }
 
     #[test]

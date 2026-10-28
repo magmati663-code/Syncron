@@ -1,5 +1,5 @@
 // Runda 2: XSS we wszystkich ścieżkach renderowania danych z backendu + wierność danych (round-trip atrybutów) + wpływ tłumaczenia EN na dane użytkownika i wartości formularzy.
-// Uruchom: node app/ui/qa/r2_xss_i18n.js     (FAIL = potwierdzony błąd aplikacji)
+// Uruchom: node tests/ui-qa/r2_xss_i18n.js     (FAIL = potwierdzony błąd aplikacji)
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const R = reporter("r2_xss_i18n");
 const EVIL = '"><img src=x onerror="window.__xss=(window.__xss||0)+1"><b id=pwn>x</b>\'&amp;';

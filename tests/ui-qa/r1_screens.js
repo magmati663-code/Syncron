@@ -1,5 +1,5 @@
 // Runda 1: przejście wszystkich ekranów w PL i EN na atrapie backendu; błędy konsoli; w EN wykrycie nieprzetłumaczonych tekstów.
-// Uruchom: node app/ui/qa/r1_screens.js
+// Uruchom: node tests/ui-qa/r1_screens.js
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const R = reporter("r1_screens");
 

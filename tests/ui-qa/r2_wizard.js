@@ -1,5 +1,5 @@
 // Runda 2: kreator zadania - wpisy brzegowe/złośliwe, zgodność wysyłanego JSON z modelem Job (serde), walidacje, podwójne kliknięcie.
-// Uruchom: node app/ui/qa/r2_wizard.js     (FAIL = potwierdzony błąd aplikacji)
+// Uruchom: node tests/ui-qa/r2_wizard.js     (FAIL = potwierdzony błąd aplikacji)
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const R = reporter("r2_wizard");
 

@@ -1,12 +1,12 @@
 // Wspólny harness QA UI Syncron (nie jest częścią aplikacji).
-// Użycie skryptów: node app/ui/qa/<skrypt>.js  (playwright z NODE_PATH albo z globalnego node_modules)
+// Użycie skryptów: node tests/ui-qa/<skrypt>.js  (playwright z NODE_PATH albo z globalnego node_modules)
 const path = require("path");
 const { execSync } = require("child_process");
 function pw() {
   try { return require("playwright"); } catch {}
   return require(path.join(execSync("npm root -g").toString().trim(), "playwright"));
 }
-const UI = path.resolve(__dirname, "..");
+const UI = path.resolve(__dirname, "../../app/ui");
 const URL = "file://" + path.join(UI, "index.html");
 
 // Skrypt wstrzykiwany przed aplikacją: atrapa window.__TAURI__ z backendem w pamięci.

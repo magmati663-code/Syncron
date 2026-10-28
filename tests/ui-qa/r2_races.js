@@ -1,5 +1,5 @@
 // Runda 2: polling co 2 s i wyścigi - utrata fokusu, nieaktualny czas względny, wyścig w koszu, ponowne wejście ask(), dostępność klawiatury, wyszukiwanie w EN.
-// Uruchom: node app/ui/qa/r2_races.js     (FAIL = potwierdzony błąd aplikacji)
+// Uruchom: node tests/ui-qa/r2_races.js     (FAIL = potwierdzony błąd aplikacji)
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const R = reporter("r2_races");
 const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.textContent));

@@ -1,5 +1,5 @@
 // Runda 1/2: funkcje poboczne - szablony, drzewo podfolderów, kosz w kreatorze, CSV, wstrzymanie, plakietka uwagi, VSS, import/eksport, podpowiedź ścieżki.
-// Uruchom: node app/ui/qa/r2_misc.js     (FAIL = potwierdzony błąd aplikacji)
+// Uruchom: node tests/ui-qa/r2_misc.js     (FAIL = potwierdzony błąd aplikacji)
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const fs = require("fs");
 const R = reporter("r2_misc");

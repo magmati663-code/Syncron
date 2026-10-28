@@ -1,5 +1,5 @@
 // Runda 2: błąd backendu (rejected promise) w każdej komendzie - czy UI nie zawisa, czy komunikaty są sensowne.
-// Uruchom: node app/ui/qa/r2_errors.js     (FAIL = potwierdzony błąd aplikacji)
+// Uruchom: node tests/ui-qa/r2_errors.js     (FAIL = potwierdzony błąd aplikacji)
 const { launch, mkJob, mkStatus, reporter } = require("./lib");
 const R = reporter("r2_errors");
 

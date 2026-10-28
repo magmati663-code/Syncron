@@ -1,12 +1,12 @@
 // Runda 1: statyczna zgodność kontraktu JS (invoke) <-> Rust (#[tauri::command], generate_handler!, nazwy/liczba argumentów).
-// Uruchom: node app/ui/qa/r1_contract.js
+// Uruchom: node tests/ui-qa/r1_contract.js
 const fs = require("fs");
 const path = require("path");
 const { reporter } = require("./lib");
 const R = reporter("r1_contract");
-const js = fs.readFileSync(path.join(__dirname, "../app.js"), "utf8");
-const rs = fs.readFileSync(path.join(__dirname, "../../src-tauri/src/main.rs"), "utf8");
-const cap = fs.readFileSync(path.join(__dirname, "../../src-tauri/capabilities/default.json"), "utf8");
+const js = fs.readFileSync(path.join(__dirname, "../../app/ui/app.js"), "utf8");
+const rs = fs.readFileSync(path.join(__dirname, "../../app/src-tauri/src/main.rs"), "utf8");
+const cap = fs.readFileSync(path.join(__dirname, "../../app/src-tauri/capabilities/default.json"), "utf8");
 
 // komendy Rust
 const cmds = {};

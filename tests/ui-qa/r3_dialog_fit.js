@@ -1,5 +1,5 @@
 // Runda 3: czy przyciski stopki kreatora (Wstecz/Dalej/Zapisz) są widoczne w oknie o rozmiarach aplikacji (domyślne 1040x700, minimalne 860x560) dla każdego kroku.
-// Uruchom: node app/ui/qa/r3_dialog_fit.js     (FAIL = potwierdzony błąd)
+// Uruchom: node tests/ui-qa/r3_dialog_fit.js     (FAIL = potwierdzony błąd)
 const { launch, reporter } = require("./lib");
 const path = require("path");
 const os = require("os");
