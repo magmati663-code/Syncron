@@ -58,7 +58,11 @@ impl log::Log for FileLogger {
                 "[{}] {:<5} {}",
                 chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
                 r.level(),
+                // nowe linie w komunikacie (np. nazwa pliku) nie mogą fałszować kolejnych wpisów
                 r.args()
+                    .to_string()
+                    .replace('\r', "\\r")
+                    .replace('\n', "\\n")
             );
         }
     }
@@ -142,14 +146,50 @@ fn kind_of(loc: &str) -> String {
     }
 }
 
-/// Tekst diagnostyczny do wklejenia w zgłoszeniu: wersja, system, zadania (bez ścieżek) i końcówka dziennika.
+/// Zastępuje ścieżki (`C:\\...`, `\\\\serwer\\...`, `/home/...`) tekstem `<ścieżka>`; ścieżka kończy się na cudzysłowie,
+/// nawiasie zamykającym, sekwencji `: ` albo końcu wiersza.
+fn redact_paths(text: &str) -> String {
+    let ch: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < ch.len() {
+        let prev_ok =
+            i == 0 || !(ch[i - 1].is_alphanumeric() || ch[i - 1] == ':' || ch[i - 1] == '/');
+        let at = |k: usize| ch.get(i + k).copied().unwrap_or('\0');
+        let win_drive = ch[i].is_ascii_alphabetic()
+            && at(1) == ':'
+            && (at(2) == '\\' || at(2) == '/')
+            && (i == 0 || !ch[i - 1].is_alphanumeric());
+        let unc = ch[i] == '\\' && at(1) == '\\';
+        let unix = ch[i] == '/' && prev_ok && (at(1).is_alphanumeric() || "._~-".contains(at(1)));
+        if win_drive || unc || unix {
+            let mut j = i;
+            while j < ch.len() {
+                let c = ch[j];
+                if "”\"'»)]\n\r".contains(c) || (c == ':' && ch.get(j + 1) == Some(&' ')) {
+                    break;
+                }
+                j += 1;
+            }
+            out.push_str("<ścieżka>");
+            i = j;
+        } else {
+            out.push(ch[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Tekst diagnostyczny do wklejenia w zgłoszeniu: wersja, system, zadania i końcówka dziennika.
+/// Ścieżki w błędach i dzienniku są zastąpione `<ścieżka>`; nazwy zadań i kont rclone pozostają.
 #[tauri::command]
 async fn get_diagnostics(r: State<'_, Runner>) -> Res<String> {
     let runner = r.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut o = String::new();
         o += &format!("Syncron {}\nSystem: {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
-        o += &format!("rclone: {}\n", run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string()).unwrap_or_else(|e| format!("niedostępny ({e})")));
+        o += &format!("rclone: {}\n", run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string()).unwrap_or_else(|e| format!("niedostępny ({})", redact_paths(&e))));
         o += &format!("VSS: obsługa={}, administrator={}\n", vss::supported(), vss::is_admin());
         let st = runner.status();
         let jobs = runner.load_jobs();
@@ -160,18 +200,18 @@ async fn get_diagnostics(r: State<'_, Runner>) -> Res<String> {
                 "- „{}”: {} ⇄ {}, tryb {:?}, harmonogram {:?}, kosz {} dni, stan: {}{}\n",
                 j.name, kind_of(&j.left), kind_of(&j.right), j.mode, j.schedule, j.trash_days,
                 s.map(|s| s.state.clone()).unwrap_or_default(),
-                s.and_then(|s| s.error.clone()).map(|e| format!(", błąd: {e}")).unwrap_or_default()
+                s.and_then(|s| s.error.clone()).map(|e| format!(", błąd: {}", redact_paths(&e))).unwrap_or_default()
             );
             if let Some(l) = s.and_then(|s| s.last.as_ref()) {
                 o += &format!("    ostatni przebieg: skopiowano {}, usunięto {}, przeniesiono {}, konflikty {}, zajęte {}, błędy {}{}\n",
                     l.copied, l.deleted, l.moved, l.conflicts.len(), l.busy.len(), l.errors.len(),
-                    l.vss_note.as_ref().map(|n| format!(", VSS: {n}")).unwrap_or_default());
+                    l.vss_note.as_ref().map(|n| format!(", VSS: {}", redact_paths(n))).unwrap_or_default());
             }
         }
         let log = std::fs::read_to_string(runner.state_dir().join("logs").join("syncron.log")).unwrap_or_default();
         let tail: Vec<&str> = log.lines().rev().take(200).collect();
         o += "\nOstatnie wpisy dziennika:\n";
-        o += &tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        o += &redact_paths(&tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
         Ok(o)
     })
     .await
@@ -209,12 +249,7 @@ fn list_jobs(r: State<Runner>) -> Vec<Job> {
 
 #[tauri::command]
 fn save_job(r: State<Runner>, job: Job) -> Res<()> {
-    if job.name.trim().is_empty() || job.left.trim().is_empty() || job.right.trim().is_empty() {
-        return Err("Podaj nazwę oraz obie lokalizacje.".into());
-    }
-    if job.left.trim() == job.right.trim() {
-        return Err("Lewa i prawa lokalizacja nie mogą być takie same.".into());
-    }
+    job.validate()?;
     let mut jobs = r.load_jobs();
     match jobs.iter().position(|j| j.id == job.id) {
         Some(i) => {
@@ -232,6 +267,7 @@ fn save_job(r: State<Runner>, job: Job) -> Res<()> {
 
 #[tauri::command]
 fn delete_job(r: State<Runner>, id: String) -> Res<()> {
+    find_job(&r, &id)?;
     r.stop(&id);
     let jobs: Vec<Job> = r.load_jobs().into_iter().filter(|j| j.id != id).collect();
     r.save_jobs(&jobs).map_err(|e| e.to_string())?;
@@ -246,11 +282,7 @@ fn run_now(r: State<Runner>, id: String, force: bool) -> bool {
 /// Symulacja: pokazuje plan działań bez zmian na dyskach.
 #[tauri::command]
 async fn dry_run(r: State<'_, Runner>, id: String) -> Res<Report> {
-    let job = r
-        .load_jobs()
-        .into_iter()
-        .find(|j| j.id == id)
-        .ok_or("brak zadania")?;
+    let job = find_job(&r, &id)?;
     let dir = r.state_dir().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
         engine::run_job(&job, &dir, true, false).map_err(|e| e.to_string())
@@ -267,11 +299,7 @@ async fn resolve_conflict(
     path: String,
     left_wins: bool,
 ) -> Res<()> {
-    let job = r
-        .load_jobs()
-        .into_iter()
-        .find(|j| j.id == id)
-        .ok_or("brak zadania")?;
+    let job = find_job(&r, &id)?;
     let runner = r.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         runner.with_job_lock(&job.id, || {
@@ -287,13 +315,28 @@ async fn resolve_conflict(
 
 /// Podpowiedź przy wpisywaniu ścieżki: czy folder lokalny istnieje (dyski sieciowe mogą być chwilowo niedostępne).
 #[tauri::command]
-fn check_path(path: String) -> Option<String> {
-    match syncron_core::location::Location::parse(&path) {
-        syncron_core::location::Location::Local(p) if !p.as_os_str().is_empty() && !p.is_dir() => {
-            Some("Ten folder nie jest teraz dostępny. Jeśli to dysk sieciowy, upewnij się, że jest podłączony.".into())
+async fn check_path(path: String) -> Option<String> {
+    // is_dir() na niedostępnym UNC potrafi blokować dziesiątki sekund: sprawdzamy w osobnym wątku z limitem czasu
+    tauri::async_runtime::spawn_blocking(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let msg = match syncron_core::location::Location::parse(&path) {
+                syncron_core::location::Location::Local(p)
+                    if !p.as_os_str().is_empty() && !p.is_dir() =>
+                {
+                    Some("Ten folder nie jest teraz dostępny. Jeśli to dysk sieciowy, upewnij się, że jest podłączony.".to_string())
+                }
+                _ => None,
+            };
+            let _ = tx.send(msg);
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(4)) {
+            Ok(m) => m,
+            Err(_) => Some("Nie można teraz sprawdzić tego folderu (brak odpowiedzi w ciągu 4 s). Jeśli to dysk sieciowy, sprawdź połączenie.".to_string()),
         }
-        _ => None,
-    }
+    })
+    .await
+    .unwrap_or(None)
 }
 
 #[tauri::command]
@@ -516,7 +559,11 @@ fn get_settings(r: State<Runner>) -> Settings {
 }
 
 #[tauri::command]
-fn set_settings(r: State<Runner>, settings: Settings) -> Res<()> {
+fn set_settings(r: State<Runner>, mut settings: Settings) -> Res<()> {
+    if settings.language != "pl" && settings.language != "en" {
+        return Err("Nieobsługiwany język (dostępne: pl, en).".into());
+    }
+    settings.unavailable_minutes = settings.unavailable_minutes.min(10_080);
     std::fs::write(
         settings_path(&r),
         serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?,
@@ -528,7 +575,9 @@ fn find_job(r: &Runner, id: &str) -> Res<Job> {
     r.load_jobs()
         .into_iter()
         .find(|j| j.id == id)
-        .ok_or_else(|| "brak zadania".to_string())
+        .ok_or_else(|| {
+            "Nie znaleziono zadania o podanym identyfikatorze (mogło zostać usunięte).".to_string()
+        })
 }
 
 #[tauri::command]
@@ -602,38 +651,79 @@ fn export_config(r: State<Runner>, path: String) -> Res<usize> {
 }
 
 /// Import zadań z pliku: zadania o tym samym identyfikatorze są zastępowane, reszta dopisywana.
+/// Zadania są walidowane i zapisywane jako wyłączone (`enabled = false`) — użytkownik włącza je po sprawdzeniu.
+/// Zwraca komunikat do pokazania w interfejsie (np. „3 (wyłączone — włącz je po sprawdzeniu)”).
 #[tauri::command]
-fn import_config(r: State<Runner>, path: String) -> Res<usize> {
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let incoming: Vec<Job> = serde_json::from_str(&text)
-        .map_err(|e| format!("to nie jest plik konfiguracji Syncron: {e}"))?;
+fn import_config(r: State<Runner>, path: String) -> Res<String> {
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Nie można odczytać pliku importu: {e}"))?;
+    let incoming = syncron_core::model::parse_import(&text)?;
     let mut jobs = r.load_jobs();
     for j in &incoming {
         match jobs.iter().position(|x| x.id == j.id) {
-            Some(i) => jobs[i] = j.clone(),
+            Some(i) => {
+                if jobs[i].left != j.left || jobs[i].right != j.right {
+                    engine::reset_state(r.state_dir(), &j.id).map_err(|e| e.to_string())?;
+                }
+                jobs[i] = j.clone();
+            }
             None => jobs.push(j.clone()),
         }
     }
     r.save_jobs(&jobs).map_err(|e| e.to_string())?;
-    for j in incoming.iter() {
-        r.start(j.clone());
+    for mut j in incoming.iter().cloned() {
+        j.enabled = false;
+        r.start(j); // wyłączone zadanie tylko zatrzymuje poprzednią wersję
     }
-    Ok(incoming.len())
+    Ok(format!(
+        "{} (wyłączone — włącz je po sprawdzeniu)",
+        incoming.len()
+    ))
+}
+
+/// Elementy menu zasobnika (tłumaczone zgodnie z `settings.language`).
+struct TrayMenu {
+    show: MenuItem<tauri::Wry>,
+    pause: MenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+}
+
+impl TrayMenu {
+    fn apply(&self, en: bool) {
+        let (a, b, c) = if en {
+            ("Open Syncron", "Pause / resume syncing", "Quit")
+        } else {
+            (
+                "Otwórz Syncron",
+                "Wstrzymaj / wznów synchronizację",
+                "Zakończ",
+            )
+        };
+        let _ = self.show.set_text(a);
+        let _ = self.pause.set_text(b);
+        let _ = self.quit.set_text(c);
+    }
 }
 
 /// Wątek powiadomień systemowych: nowy błąd, zatrzymanie przez zabezpieczenie, nowy konflikt.
-fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon) {
+fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: TrayMenu) {
     use tauri_plugin_notification::NotificationExt;
     std::thread::spawn(move || {
         let mut seen: HashMap<String, (String, usize)> = HashMap::new();
         // od kiedy zadanie jest w stanie błędu (czas, czy wysłano powiadomienie o długiej niedostępności)
         let mut down: HashMap<String, (std::time::Instant, bool)> = HashMap::new();
         let mut last_state = String::new();
+        let mut last_lang = String::new();
         loop {
             std::thread::sleep(std::time::Duration::from_secs(4));
             let r = app.state::<Runner>();
             let st = load_settings(&r);
             let en = st.language == "en";
+            if st.language != last_lang {
+                last_lang = st.language.clone();
+                menu.apply(en);
+                last_state.clear(); // podpowiedź ikony też w nowym języku
+            }
             let jobs = r.load_jobs();
             // ikona i podpowiedź w zasobniku zależą od ogólnego stanu
             let (state, color) = overall_state(&r);
@@ -798,6 +888,7 @@ fn main() {
             // własna konfiguracja rclone w folderze danych aplikacji
             std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
             locate_rclone(app.handle());
+            vss::set_data_dir(&dir); // rejestr migawek i kopie tymczasowe w prywatnym katalogu danych
             vss::cleanup_stale(); // migawki pozostawione po awarii
             let runner = Runner::new(dir);
             runner.start_all();
@@ -836,7 +927,9 @@ fn main() {
                     }
                 })
                 .build(app)?;
-            spawn_notifier(app.handle().clone(), tray);
+            let tm = TrayMenu { show, pause, quit };
+            tm.apply(load_settings(&app.state::<Runner>()).language == "en");
+            spawn_notifier(app.handle().clone(), tray, tm);
 
             if std::env::args().any(|a| a == "--hidden") {
                 if let Some(w) = app.get_webview_window("main") {
@@ -884,4 +977,24 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("błąd uruchamiania Syncron");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_paths;
+
+    #[test]
+    fn redaguje_sciezki() {
+        assert_eq!(
+            redact_paths("błąd: nie można zapisać „C:\\Users\\Jan Kowalski\\a.txt”: odmowa"),
+            "błąd: nie można zapisać „<ścieżka>”: odmowa"
+        );
+        assert_eq!(
+            redact_paths("open /home/jan/x.txt: denied"),
+            "open <ścieżka>: denied"
+        );
+        assert_eq!(redact_paths("\\\\serwer\\udział\\f"), "<ścieżka>");
+        assert_eq!(redact_paths("https://x.pl/a i 1/2"), "https://x.pl/a i 1/2");
+        assert_eq!(redact_paths("zwykły tekst"), "zwykły tekst");
+    }
 }

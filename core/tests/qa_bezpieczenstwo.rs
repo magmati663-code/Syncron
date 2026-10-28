@@ -315,45 +315,33 @@ fn src_invalid_on_windows_jest_uzywana_w_synchronizacji() {
 // ======================================================================
 
 #[test]
-#[ignore = "BUG T9-06: delete_shadow wstawia id z %TEMP%\\syncron-vss-active.txt do skryptu PowerShell bez walidacji (wstrzyknięcie przy cleanup_stale jako administrator)"]
 fn src_vss_id_z_pliku_rejestru_jest_walidowane() {
     let s = repo_file("core/src/vss.rs");
+    // naprawa: id nie jest wstawiane do tekstu skryptu (zmienna środowiskowa) i jest walidowane jako GUID
     assert!(
-        s.contains("$_.ID -eq '{id}'"),
-        "zmieniono skrypt — zaktualizuj test"
+        !s.contains("$_.ID -eq '{id}'"),
+        "id jest interpolowane do PowerShell; payload: x' }}; Start-Process calc; {{ '"
     );
-    // oczekiwana poprawka: walidacja GUID (np. is_ascii_hexdigit / '-' / '{' '}') przed użyciem w skrypcie
+    assert!(s.contains("$env:SYNCRON_SHADOW_ID"));
     assert!(
         s.contains("is_ascii_hexdigit"),
-        "id jest interpolowane do PowerShell bez sprawdzenia formatu; payload: x' }}; Start-Process calc; {{ '"
+        "brak walidacji formatu GUID"
     );
 }
 
-/// Model: jak PowerShell parsuje literał w apostrofach (`''` -> `'`).
-fn ps_single_unquote(lit: &str) -> String {
-    lit.replace("''", "'")
-}
-
 #[test]
-#[ignore = "BUG T9-07: restart_elevated — apostrof w ścieżce exe jest cytowany tylko raz, a wartość trafia do zagnieżdżonego skryptu (psuje uruchomienie lub pozwala na wstrzyknięcie)"]
 fn src_restart_elevated_podwojne_cytowanie_apostrofu() {
+    // naprawa: ścieżka exe nie jest cytowana w skrypcie — idzie osobno, w zmiennej środowiskowej
     let s = repo_file("core/src/vss.rs");
-    let tpl = "Start-Process -FilePath ''{e}'' -Verb RunAs";
-    assert!(s.contains(tpl), "zmieniono skrypt — zaktualizuj test");
-    // replika: e = exe z apostrofem zdublowanym raz (jak w kodzie)
-    let exe = "C:\\Users\\O'Brien\\Syncron\\syncron.exe";
-    let e = exe.replace('\'', "''");
-    let outer_literal = format!("Start-Sleep -Seconds 2; {}", tpl.replace("{e}", &e));
-    let inner = ps_single_unquote(&outer_literal); // to, co zobaczy wewnętrzny PowerShell
-                                                   // poprawnie: wewnętrzny skrypt zawiera FilePath 'C:\Users\O''Brien\...' (apostrof zdublowany po raz drugi)
     assert!(
-        inner.contains("O''Brien"),
-        "wewnętrzny skrypt po rozpakowaniu: {inner}  (apostrof kończy literał -> błąd składni / injection)"
+        !s.contains("-FilePath ''{e}''"),
+        "ścieżka exe nadal jest sklejana ze skryptem PowerShell"
     );
+    assert!(s.contains("-FilePath $env:SYNCRON_EXE -Verb RunAs"));
+    assert!(s.contains("-Execute $env:SYNCRON_EXE"));
 }
 
 #[test]
-#[ignore = "BUG T9-08: plik rejestru migawek w %TEMP% o stałej, przewidywalnej nazwie i bez kontroli właściciela/uprawnień (m.in. C:\\Windows\\Temp dla konta SYSTEM)"]
 fn src_vss_rejestr_nie_lezy_w_przewidywalnym_temp() {
     let s = repo_file("core/src/vss.rs");
     assert!(
@@ -363,7 +351,7 @@ fn src_vss_rejestr_nie_lezy_w_przewidywalnym_temp() {
 }
 
 #[test]
-#[ignore = "BUG T9-09: kopie z migawki VSS trafiają do %TEMP%\\syncron-vss\\<pid>-<n> (przewidywalne nazwy; pozostają po awarii)"]
+#[ignore = "DECYZJA T9-09: vss::scratch_dir() (nieprzewidywalna nazwa, katalog danych aplikacji) gotowe, ale wywołanie siedzi w location.rs (inny ekspert) — integrator ma zamienić temp_dir().join(\"syncron-vss\")"]
 fn src_vss_temp_nie_jest_przewidywalny() {
     let s = repo_file("core/src/location.rs");
     assert!(
@@ -406,7 +394,6 @@ fn src_add_remote_waliduje_kind_i_klucze() {
 }
 
 #[test]
-#[ignore = "BUG T9-12: import_config nie waliduje zadań jak save_job i od razu je uruchamia (enabled z pliku)"]
 fn src_import_config_waliduje_i_nie_uruchamia_od_razu() {
     let s = repo_file("app/src-tauri/src/main.rs");
     let start = s.find("fn import_config").unwrap();
@@ -435,7 +422,6 @@ fn tauri_conf() -> serde_json::Value {
 }
 
 #[test]
-#[ignore = "BUG T9-13: tauri.conf.json: app.security.csp = null (brak Content-Security-Policy; ewentualny XSS = pełny dostęp do poleceń IPC)"]
 fn tauri_csp_jest_ustawione() {
     let c = tauri_conf();
     assert!(

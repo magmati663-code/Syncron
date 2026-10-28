@@ -181,7 +181,151 @@ pub struct Job {
     pub triggers: Triggers,
 }
 
+/// Znormalizowana lokalizacja do porównań: (nazwa konta rclone lub None, prefiks, komponenty).
+type Norm = (Option<String>, String, Vec<String>);
+
+/// Normalizacja leksykalna (bez dotykania dysku): separatory, końcowe `/`, `.`/`..`, wielkość liter (Windows/macOS).
+fn normalize_location(s: &str, ci: bool) -> Norm {
+    use crate::location::Location;
+    let fold = |x: &str| if ci { x.to_lowercase() } else { x.to_string() };
+    let s = s.trim();
+    match Location::parse(s) {
+        Location::Rclone(full) => {
+            let (name, rest) = full.split_once(':').unwrap_or((&full, ""));
+            let mut c: Vec<String> = Vec::new();
+            for part in rest.split('/') {
+                match part {
+                    "" | "." => {}
+                    ".." => {
+                        c.pop();
+                    }
+                    p => c.push(p.to_string()),
+                }
+            }
+            (Some(name.to_string()), String::new(), c)
+        }
+        Location::Local(_) => {
+            let win_like = cfg!(windows)
+                || s.starts_with("\\\\")
+                || (s.len() >= 3
+                    && s.as_bytes()[0].is_ascii_alphabetic()
+                    && s.as_bytes()[1] == b':'
+                    && s.as_bytes()[2] == b'\\');
+            let mut t = s.strip_prefix("\\\\?\\").unwrap_or(s).to_string();
+            if win_like {
+                t = t.replace('\\', "/");
+            }
+            let mut prefix = String::new();
+            let mut rest = t.as_str();
+            let b = rest.as_bytes();
+            if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+                prefix = rest[..2].to_uppercase();
+                rest = &rest[2..];
+            }
+            if let Some(r) = rest.strip_prefix("//") {
+                prefix.push_str("//");
+                rest = r;
+            } else if let Some(r) = rest.strip_prefix('/') {
+                prefix.push('/');
+                rest = r;
+            }
+            let mut c: Vec<String> = Vec::new();
+            for part in rest.split('/') {
+                match part {
+                    "" | "." => {}
+                    ".." => {
+                        if matches!(c.last(), Some(l) if l != "..") {
+                            c.pop();
+                        } else if prefix.is_empty() {
+                            c.push("..".into());
+                        }
+                    }
+                    p => c.push(fold(p)),
+                }
+            }
+            (None, fold(&prefix), c)
+        }
+    }
+}
+
+fn is_prefix(a: &Norm, b: &Norm) -> bool {
+    a.0 == b.0 && a.1 == b.1 && b.2.len() >= a.2.len() && b.2[..a.2.len()] == a.2[..]
+}
+
 impl Job {
+    /// Sprawdza poprawność zadania (puste pola, takie same/zagnieżdżone lokalizacje, zakresy liczb).
+    /// Zwraca komunikat po polsku. Wywoływane przy zapisie i imporcie zadań.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() {
+            return Err("Zadanie nie ma identyfikatora.".into());
+        }
+        if self.name.trim().is_empty() {
+            return Err("Podaj nazwę zadania.".into());
+        }
+        if self.left.trim().is_empty() || self.right.trim().is_empty() {
+            return Err("Podaj obie lokalizacje (lewą i prawą).".into());
+        }
+        let ci = cfg!(any(windows, target_os = "macos"));
+        let (l, r) = (
+            normalize_location(&self.left, ci),
+            normalize_location(&self.right, ci),
+        );
+        if l == r {
+            return Err("Lewa i prawa lokalizacja nie mogą być takie same.".into());
+        }
+        if is_prefix(&l, &r) {
+            return Err("Prawa lokalizacja leży wewnątrz lewej — każde uruchomienie kopiowałoby folder w siebie. Wybierz rozłączne foldery.".into());
+        }
+        if is_prefix(&r, &l) {
+            return Err("Lewa lokalizacja leży wewnątrz prawej — każde uruchomienie kopiowałoby folder w siebie. Wybierz rozłączne foldery.".into());
+        }
+        match &self.schedule {
+            Schedule::Manual => {}
+            Schedule::Realtime { poll_secs } if *poll_secs < 1 => {
+                return Err("Interwał sprawdzania musi wynosić co najmniej 1 sekundę.".into())
+            }
+            Schedule::Interval { secs } if *secs < 1 => {
+                return Err("Interwał harmonogramu musi wynosić co najmniej 1 sekundę.".into())
+            }
+            Schedule::Daily { hour, minute } if *hour >= 24 || *minute >= 60 => {
+                return Err(format!(
+                    "Nieprawidłowa godzina harmonogramu dziennego: {hour}:{minute:02} (godzina 0–23, minuta 0–59)."
+                ))
+            }
+            _ => {}
+        }
+        if let Some([a, b]) = self.window {
+            if a >= 24 || b >= 24 {
+                return Err("Okno czasowe: godziny muszą mieścić się w zakresie 0–23.".into());
+            }
+        }
+        if !(1..=100).contains(&self.guard_pct) {
+            return Err("Zabezpieczenie przed masowym usuwaniem: wartość 1–100%.".into());
+        }
+        if !(1..=16).contains(&self.threads) {
+            return Err("Liczba wątków musi mieścić się w zakresie 1–16.".into());
+        }
+        if self.trash_days > 36_500 {
+            return Err("Retencja kosza: maksymalnie 36500 dni.".into());
+        }
+        let max_kbps = u32::MAX / 1024;
+        if self.bandwidth.kbps > max_kbps || self.bandwidth.off_kbps > max_kbps {
+            return Err(format!(
+                "Limit prędkości jest zbyt duży (maksymalnie {max_kbps} KB/s)."
+            ));
+        }
+        if let Some([a, b]) = self.bandwidth.hours {
+            if a >= 24 || b >= 24 {
+                return Err("Godziny limitu prędkości muszą mieścić się w zakresie 0–23.".into());
+            }
+        }
+        if let (Some(min), Some(max)) = (self.min_size, self.max_size) {
+            if min > max {
+                return Err("Minimalny rozmiar pliku jest większy od maksymalnego.".into());
+            }
+        }
+        Ok(())
+    }
     pub fn options(&self) -> Options {
         Options {
             mode: self.mode,
@@ -216,6 +360,36 @@ impl Job {
         }
         rs
     }
+}
+
+/// Wczytuje zadania z tekstu pliku importu: usuwa BOM, waliduje każde zadanie (`Job::validate`)
+/// i wyłącza je (`enabled = false`) — plik od osoby trzeciej nie może uruchomić synchronizacji bez wiedzy użytkownika.
+/// Duplikaty identyfikatorów w pliku: wygrywa ostatnie wystąpienie.
+pub fn parse_import(text: &str) -> Result<Vec<Job>, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut jobs: Vec<Job> = serde_json::from_str(text).map_err(|e| {
+        format!(
+            "To nie jest plik konfiguracji Syncron (błąd w wierszu {}, kolumnie {}).",
+            e.line(),
+            e.column()
+        )
+    })?;
+    if jobs.is_empty() {
+        return Err("Plik nie zawiera żadnych zadań.".into());
+    }
+    for (i, j) in jobs.iter().enumerate() {
+        j.validate()
+            .map_err(|e| format!("Zadanie nr {} („{}”): {e}", i + 1, j.name))?;
+    }
+    let mut out: Vec<Job> = Vec::new();
+    for mut j in jobs.drain(..) {
+        j.enabled = false;
+        match out.iter().position(|x| x.id == j.id) {
+            Some(p) => out[p] = j,
+            None => out.push(j),
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
