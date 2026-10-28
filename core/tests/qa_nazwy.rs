@@ -204,6 +204,8 @@ fn r1_rules_nazwa_vs_sciezka() {
     assert!(!rs.allows(&fi("inne/ą.txt", 1)));
 }
 
+// wymaga systemu plików rozróżniającego wielkość liter (Windows i macOS domyślnie nie)
+#[cfg(target_os = "linux")]
 #[test]
 fn r1_listowanie_nfd_nfc_i_wielkosc_liter_kolizja_zgloszona() {
     let (_t, l, _r, _s) = setup();
@@ -472,6 +474,8 @@ fn r2_kolizje_nfc_nfd_w_folderze_nie_gubia_pliku() {
     assert!(l.join("żółć.txt").exists() && l.join(nfd("żółć.txt")).exists());
 }
 
+// wymaga systemu plików rozróżniającego wielkość liter (Windows i macOS domyślnie nie)
+#[cfg(target_os = "linux")]
 #[test]
 fn r2_kolizja_wielkosci_liter_wystepuje_po_przebiegu_nie_niszczy_danych() {
     let (_t, l, r, s) = setup();
