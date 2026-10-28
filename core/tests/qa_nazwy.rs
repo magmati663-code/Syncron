@@ -598,7 +598,6 @@ fn r2_conflict_name_miesci_sie_w_255() {
 }
 
 #[test]
-#[ignore = "BUG: dwa konflikty KeepBoth tego samego pliku w jednym dniu - druga kopia konfliktowa nadpisuje pierwsza bez kopii zapasowej (trash_days=0 => utrata danych)"]
 fn r2_keep_both_dwa_konflikty_tego_samego_dnia() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "0").unwrap();
@@ -657,7 +656,7 @@ fn r2_nazwa_nie_utf8() {
 }
 
 #[test]
-#[ignore = "BUG: zmiana tylko wielkosci liter nazwy (a.txt -> A.txt) nie propaguje sie na druga strone"]
+#[ignore = "DECYZJA: T5-02 - klucz = małe litery, zmiana samej wielkości liter nie jest propagowana"]
 fn r2_zmiana_wielkosci_liter_nazwy_propaguje_sie() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("raport.txt"), "x").unwrap();

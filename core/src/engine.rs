@@ -3,7 +3,7 @@ use crate::location::Opts;
 use crate::location::{Entry, Location, OpError};
 use crate::model::Job;
 use crate::names;
-use crate::plan::{mass_delete_guard, plan, same, Action, Meta, Tree};
+use crate::plan::{mass_delete_guard, plan, same, Action, Meta, Mode, Tree};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -56,8 +56,33 @@ pub struct HistoryRow {
     pub detail: String,
 }
 
+/// Otwiera bazę stanu. Inicjalizacja (WAL + schemat) jest serializowana w procesie i ponawiana
+/// z krótkim backoffem: `PRAGMA journal_mode=WAL` potrafi zwrócić SQLITE_BUSY mimo busy_timeout
+/// przy równoległym pierwszym starcie (także z innego procesu).
 pub fn open_db(state_dir: &Path) -> anyhow::Result<Connection> {
+    static INIT: Mutex<()> = Mutex::new(());
     std::fs::create_dir_all(state_dir)?;
+    let _g = INIT.lock().unwrap_or_else(|e| e.into_inner());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match open_db_once(state_dir) {
+            Ok(c) => return Ok(c),
+            Err(e) if is_busy(&e) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+fn open_db_once(state_dir: &Path) -> rusqlite::Result<Connection> {
     let c = Connection::open(state_dir.join("state.db"))?;
     c.busy_timeout(std::time::Duration::from_secs(10))?;
     c.execute_batch(
@@ -147,6 +172,8 @@ enum Out {
     },
     Conflict(String, Meta, Meta),
     Busy(String, String),
+    /// Pominięto akcję ze względów bezpieczeństwa (ostrzeżenie, nie błąd krytyczny).
+    Warn(String, String),
     Err(String, String),
 }
 
@@ -160,15 +187,35 @@ struct Ctx<'a> {
     o: &'a Opts,
 }
 
+/// Skrót BLAKE3 pliku lokalnego (strumieniowo); None dla rclone lub gdy nie da się odczytać.
+fn local_hash(loc: &Location, rel: &str) -> Option<[u8; 32]> {
+    let Location::Local(p) = loc else {
+        return None;
+    };
+    let mut f = std::fs::File::open(crate::location::local_full(p, rel)).ok()?;
+    let mut h = blake3::Hasher::new();
+    std::io::copy(&mut f, &mut h).ok()?;
+    Some(*h.finalize().as_bytes())
+}
+
+/// Jedna strona synchronizacji: lokalizacja i jej wpisy ze skanu.
+struct Side<'a> {
+    loc: &'a Location,
+    entries: &'a BTreeMap<String, Entry>,
+}
+
 /// Para „usunięty plik + nowy plik o tym samym rozmiarze i czasie” to przeniesienie: po stronie docelowej
-/// wystarczy zmienić ścieżkę zamiast kopiować od nowa (oszczędza transfer, zwłaszcza w chmurze).
+/// wystarczy zmienić ścieżkę zamiast kopiować od nowa. Samo dopasowanie rozmiaru i czasu nie wystarcza
+/// (rozpakowane archiwum zachowuje czasy): przeniesienie wykonujemy tylko, gdy treść się zgadza
+/// (hash BLAKE3, gdy obie strony są lokalne). Dla rclone nie zgadujemy: zwykłe kopiowanie + usunięcie.
+/// Dopasowanie jest n log n: kandydaci posortowani wg (rozmiar, mtime), zakresy przez bisekcję.
 fn detect_moves(
     actions: &mut BTreeMap<String, Action>,
-    lt: &Tree,
-    rt: &Tree,
-    bl: &Tree,
-    br: &Tree,
+    (lt, rt): (&Tree, &Tree),
+    (bl, br): (&Tree, &Tree),
+    (ls, rs): (Side, Side),
 ) {
+    #[allow(clippy::too_many_arguments)]
     fn pair(
         actions: &mut BTreeMap<String, Action>,
         known: &Tree,
@@ -177,36 +224,61 @@ fn detect_moves(
         old_tree: &Tree,
         new_tree: &Tree,
         to_right: bool,
+        src: &Side,
+        dst: &Side,
     ) {
-        let like = |a: &Meta, b: &Meta| a.size == b.size && (a.mtime - b.mtime).abs() <= 2;
-        let olds: Vec<(String, Meta)> = actions
+        type Key = (u64, i64, String);
+        // stary plik musi nadal zgadzać się z bazą (nie został zmieniony po stronie docelowej)
+        let mut olds: Vec<Key> = actions
             .iter()
-            .filter(|(k, a)| **a == del && known.contains_key(*k)) // tylko pliki, które wcześniej były zsynchronizowane
-            .filter_map(|(k, _)| old_tree.get(k).map(|m| (k.clone(), *m)))
+            .filter(|(_, a)| **a == del)
+            .filter_map(|(k, _)| {
+                let (m, b) = (old_tree.get(k)?, known.get(k)?);
+                same(m, b).then(|| (m.size, m.mtime, k.clone()))
+            })
             .collect();
-        let news: Vec<(String, Meta)> = actions
+        let mut news: Vec<Key> = actions
             .iter()
             .filter(|(k, a)| **a == copy && !old_tree.contains_key(*k))
-            .filter_map(|(k, _)| new_tree.get(k).map(|m| (k.clone(), *m)))
+            .filter_map(|(k, _)| new_tree.get(k).map(|m| (m.size, m.mtime, k.clone())))
+            .filter(|(s, _, _)| *s > 0)
             .collect();
-        for (nk, nm) in &news {
-            if nm.size == 0 {
-                continue;
-            }
-            let cands: Vec<&(String, Meta)> = olds.iter().filter(|(_, om)| like(om, nm)).collect();
+        olds.sort_unstable();
+        news.sort_unstable();
+        // zakres elementów o tym samym rozmiarze i mtime w tolerancji +-2 s
+        let range = |v: &[Key], size: u64, t: i64| {
+            let lo = v.partition_point(|x| (x.0, x.1) < (size, t.saturating_sub(2)));
+            let hi = v.partition_point(|x| (x.0, x.1) <= (size, t.saturating_add(2)));
+            lo..hi.max(lo)
+        };
+        let mut moves = Vec::new();
+        for (size, t, nk) in &news {
+            let rg = range(&olds, *size, *t);
             // tylko jednoznaczne dopasowanie w obie strony
-            if cands.len() != 1 || news.iter().filter(|(_, m2)| like(m2, &cands[0].1)).count() != 1
-            {
+            if rg.len() != 1 {
                 continue;
             }
-            let from = cands[0].0.clone();
+            let (osz, ot, ok) = &olds[rg.start];
+            if range(&news, *osz, *ot).len() != 1 {
+                continue;
+            }
+            let (Some(se), Some(de)) = (src.entries.get(nk), dst.entries.get(ok)) else {
+                continue;
+            };
+            // treść musi się zgadzać; bez możliwości sprawdzenia (rclone) nie zgadujemy
+            match (local_hash(src.loc, &se.real), local_hash(dst.loc, &de.real)) {
+                (Some(a), Some(b)) if a == b => moves.push((nk.clone(), ok.clone())),
+                _ => {}
+            }
+        }
+        for (nk, from) in moves {
             actions.remove(&from);
             let a = if to_right {
                 Action::RenameRight { from }
             } else {
                 Action::RenameLeft { from }
             };
-            actions.insert(nk.clone(), a);
+            actions.insert(nk, a);
         }
     }
     pair(
@@ -217,6 +289,8 @@ fn detect_moves(
         rt,
         lt,
         true,
+        &ls,
+        &rs,
     );
     pair(
         actions,
@@ -226,6 +300,8 @@ fn detect_moves(
         lt,
         rt,
         false,
+        &rs,
+        &ls,
     );
 }
 
@@ -279,6 +355,16 @@ fn copy_one(
     Ok((se.meta, dm))
 }
 
+/// Weryfikacja przed usunięciem: plik „zniknął” po stronie `other`, ale mógł tylko wypaść ze skanu
+/// (reguła rozmiaru/maski, symlink, błędny rozmiar z rclone). Sprawdzamy go bezpośrednio, bez filtrów.
+fn survives(other: &Location, real: &str, side: &str) -> Option<String> {
+    other.stat(real).map(|_| {
+        format!(
+            "ostrzeżenie: {real}: plik nadal istnieje po stronie {side}, choć nie został wykryty przy skanowaniu (reguły, dowiązanie lub błąd listowania) - pominięto usunięcie"
+        )
+    })
+}
+
 fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
     let (le, re) = (c.ls.get(key), c.rs.get(key));
     match a {
@@ -324,22 +410,41 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
             },
             _ => Out::Err(key.into(), "przeniesienie: brak pliku źródłowego".into()),
         },
-        Action::DeleteLeft => match c.l.remove(&le.unwrap().real, c.trash) {
-            Ok(()) => Out::Removed { key: key.into() },
-            Err(e) => err_out(key, e),
-        },
-        Action::DeleteRight => match c.r.remove(&re.unwrap().real, c.trash) {
-            Ok(()) => Out::Removed { key: key.into() },
-            Err(e) => err_out(key, e),
-        },
+        Action::DeleteLeft => {
+            let real = &le.unwrap().real;
+            if let Some(w) = survives(c.r, real, "prawej") {
+                return Out::Warn(key.into(), w);
+            }
+            match c.l.remove(real, c.trash) {
+                Ok(()) => Out::Removed { key: key.into() },
+                Err(e) => err_out(key, e),
+            }
+        }
+        Action::DeleteRight => {
+            let real = &re.unwrap().real;
+            if let Some(w) = survives(c.l, real, "lewej") {
+                return Out::Warn(key.into(), w);
+            }
+            match c.r.remove(real, c.trash) {
+                Ok(()) => Out::Removed { key: key.into() },
+                Err(e) => err_out(key, e),
+            }
+        }
         Action::Conflict { keep_both: false } => {
             Out::Conflict(le.unwrap().real.clone(), le.unwrap().meta, re.unwrap().meta)
         }
         Action::Conflict { keep_both: true } => {
             let (le, re) = (le.unwrap(), re.unwrap());
             // wersja z prawej trafia na lewą pod nazwą konfliktową, wersja z lewej wygrywa pod oryginalną nazwą
+            // unikalna nazwa: nie nadpisujemy wcześniejszej kopii konfliktowej (dopisek licznika)
+            let mut alias_name = names::conflict_name(&re.real, c.date);
+            let mut n = 1;
+            while c.l.stat(&alias_name).is_some() {
+                n += 1;
+                alias_name = names::conflict_name(&re.real, &format!("{} {n}", c.date));
+            }
             let alias = Entry {
-                real: names::conflict_name(&re.real, c.date),
+                real: alias_name,
                 meta: re.meta,
             };
             let src_alias = Entry {
@@ -418,14 +523,35 @@ pub fn run_job_with(
         |m: &BTreeMap<String, Entry>| m.iter().map(|(k, e)| (k.clone(), e.meta)).collect::<Tree>();
     let (lt, rt) = (tree(&ll.files), tree(&rl.files));
     let mut actions = plan(&lt, &rt, &bl, &br, job.options());
-    detect_moves(&mut actions, &lt, &rt, &bl, &br);
+    detect_moves(
+        &mut actions,
+        (&lt, &rt),
+        (&bl, &br),
+        (
+            Side {
+                loc: &l,
+                entries: &ll.files,
+            },
+            Side {
+                loc: &r,
+                entries: &rl.files,
+            },
+        ),
+    );
     rep.planned = actions
         .iter()
         .map(|(k, a)| (k.clone(), a.clone()))
         .collect();
 
     if !force {
-        if (lt.is_empty() && !bl.is_empty()) || (rt.is_empty() && !br.is_empty()) {
+        // tryb jednostronny: sprawdzamy tylko źródło (pusty cel = legalne odtwarzanie kopii zapasowej)
+        let (chk_l, chk_r) = match job.options().mode {
+            Mode::LeftToRight => (true, false),
+            Mode::RightToLeft => (false, true),
+            Mode::TwoWay => (true, true),
+        };
+        if (chk_l && lt.is_empty() && !bl.is_empty()) || (chk_r && rt.is_empty() && !br.is_empty())
+        {
             rep.blocked = Some(
                 "jedna ze stron jest pusta, choć wcześniej były tam pliki (odpięty dysk?)".into(),
             );
@@ -480,7 +606,7 @@ pub fn run_job_with(
     });
 
     let ts = chrono::Local::now().timestamp();
-    let tx = db.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(&db, rusqlite::TransactionBehavior::Immediate)?;
     let hist = |kind: &str, path: &str, detail: &str| {
         tx.execute(
             "INSERT INTO history(ts,job,kind,path,detail) VALUES(?1,?2,?3,?4,?5)",
@@ -525,6 +651,10 @@ pub fn run_job_with(
                     right: Some(r),
                 });
                 rep.conflicts.push(p);
+            }
+            Out::Warn(p, m) => {
+                hist("ostrzeżenie", &p, &m)?;
+                rep.errors.push(m);
             }
             Out::Busy(p, m) => {
                 hist("zajęty", &p, &m)?;
