@@ -175,3 +175,41 @@ fn rules_and_temp_files_skipped() {
     assert!(r.join("ok.txt").exists());
     assert!(!r.join("skip.log").exists() && !r.join("~$otwarty.docx").exists());
 }
+
+#[test]
+fn resolve_conflict_manually() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join("a.txt"), "0").unwrap();
+    let mut j = job(&l, &r, "TwoWay");
+    j.conflict = syncpolak_core::plan::Conflict::Ask;
+    run_job(&j, &s, false, false).unwrap();
+    fs::write(l.join("a.txt"), "lewy").unwrap();
+    set_mtime(&l.join("a.txt"), 1_900_000_000);
+    fs::write(r.join("a.txt"), "prawy!").unwrap();
+    set_mtime(&r.join("a.txt"), 1_900_000_100);
+    let rep = run_job(&j, &s, false, false).unwrap();
+    assert_eq!(rep.conflicts.len(), 1);
+    syncpolak_core::engine::resolve_conflict(&j, &s, "a.txt", false).unwrap();
+    assert_eq!(fs::read_to_string(l.join("a.txt")).unwrap(), "prawy!");
+    let rep = run_job(&j, &s, false, false).unwrap();
+    assert!(
+        rep.planned.is_empty() && rep.conflicts.is_empty(),
+        "{rep:?}"
+    );
+}
+
+#[test]
+fn progress_is_reported() {
+    let (_t, l, r, s) = setup();
+    for i in 0..5 {
+        fs::write(l.join(format!("f{i}.txt")), "x").unwrap();
+    }
+    let n = std::sync::atomic::AtomicUsize::new(0);
+    let cb = |_d: usize, t: usize, _c: &str| {
+        assert_eq!(t, 5);
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    };
+    syncpolak_core::engine::run_job_with(&job(&l, &r, "TwoWay"), &s, false, false, Some(&cb))
+        .unwrap();
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 5);
+}

@@ -76,6 +76,43 @@ async fn dry_run(r: State<'_, Runner>, id: String) -> Res<Report> {
     .map_err(|e| e.to_string())?
 }
 
+/// Ręczne rozstrzygnięcie konfliktu: `left_wins` wskazuje zwycięską stronę.
+#[tauri::command]
+async fn resolve_conflict(
+    r: State<'_, Runner>,
+    id: String,
+    path: String,
+    left_wins: bool,
+) -> Res<()> {
+    let job = r
+        .load_jobs()
+        .into_iter()
+        .find(|j| j.id == id)
+        .ok_or("brak zadania")?;
+    let runner = r.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        runner.with_job_lock(&job.id, || {
+            engine::resolve_conflict(&job, runner.state_dir(), &path, left_wins)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    r.run_now(&id, false);
+    Ok(())
+}
+
+/// Podpowiedź przy wpisywaniu ścieżki: czy folder lokalny istnieje (dyski sieciowe mogą być chwilowo niedostępne).
+#[tauri::command]
+fn check_path(path: String) -> Option<String> {
+    match syncpolak_core::location::Location::parse(&path) {
+        syncpolak_core::location::Location::Local(p) if !p.as_os_str().is_empty() && !p.is_dir() => {
+            Some("Ten folder nie jest teraz dostępny. Jeśli to dysk sieciowy, upewnij się, że jest podłączony.".into())
+        }
+        _ => None,
+    }
+}
+
 #[tauri::command]
 fn overview(r: State<Runner>) -> Overview {
     Overview {
@@ -311,6 +348,8 @@ fn main() {
             delete_job,
             run_now,
             dry_run,
+            resolve_conflict,
+            check_path,
             overview,
             set_paused,
             history,

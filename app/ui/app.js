@@ -4,97 +4,213 @@ const autostart = window.__TAURI__.autostart;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const STATE = { idle: "Gotowe", running: "Synchronizuję…", waiting: "Oczekuje (pliki zajęte)", error: "Błąd", blocked: "Zablokowane", paused: "Wstrzymane", disabled: "Wyłączone" };
-const MODE = { TwoWay: "⇄ dwustronna", LeftToRight: "→ lewa do prawej", RightToLeft: "← prawa do lewej" };
-const ACTION = (a) => typeof a === "string"
-  ? ({ CopyToRight: "kopiuj →", CopyToLeft: "← kopiuj", DeleteLeft: "usuń po lewej", DeleteRight: "usuń po prawej" }[a] || a)
-  : "konflikt";
-let jobs = [], remotes = [], overview = { paused: false, status: {} }, lastHist = [];
 
+// ---------- ikony ----------
+const P = {
+  sync: '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  pause: '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  network: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  trash: '<path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+  both: '<path d="M17 3l4 4-4 4M3 7h18M7 21l-4-4 4-4M21 17H3"/>',
+  right: '<path d="M5 12h14M12 5l7 7-7 7"/>',
+  left: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+  power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+};
+const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${P[n] || ""}</svg>`;
+const hydrateIcons = (root = document) => $$("[data-i]", root).forEach((e) => (e.innerHTML = icon(e.dataset.i)));
+$("#logo").innerHTML = icon("sync");
+
+// ---------- pomocnicze ----------
+const STATE = { idle: "Gotowe", running: "Synchronizuję", waiting: "Czeka na pliki", error: "Błąd", blocked: "Zatrzymane", paused: "Wstrzymane", disabled: "Wyłączone" };
+const DIRICON = { TwoWay: "both", LeftToRight: "right", RightToLeft: "left" };
 const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString("pl-PL") : "—");
+function rel(t) {
+  if (!t) return "jeszcze nie";
+  const d = Math.max(0, Date.now() / 1000 - t);
+  if (d < 45) return "przed chwilą";
+  if (d < 3600) return `${Math.round(d / 60)} min temu`;
+  if (d < 86400) return `${Math.round(d / 3600)} godz. temu`;
+  return new Date(t * 1000).toLocaleDateString("pl-PL");
+}
 const schedText = (s) => ({ Manual: "ręcznie", Realtime: "na bieżąco", Interval: `co ${Math.round((s.secs || 0) / 60)} min`, Daily: `codziennie ${String(s.hour).padStart(2, "0")}:${String(s.minute).padStart(2, "0")}` }[s.type] || "");
+function locKind(p) {
+  if (/^[^\\/:]{2,}:/.test(p) && !/^[A-Za-z]:[\\/]/.test(p)) return "cloud";
+  if (/^(\\\\|\/\/|\/Volumes|\/mnt|\/net)/.test(p)) return "network";
+  return "folder";
+}
+const ACTION = (a) => (typeof a === "string" ? { CopyToRight: "kopiuj →", CopyToLeft: "← kopiuj", DeleteLeft: "usuń po lewej", DeleteRight: "usuń po prawej" }[a] || a : a.Conflict.keep_both ? "konflikt (zachowaj obie)" : "konflikt (do decyzji)");
 
-function toast(msg) { alert(msg); }
+function toast(msg, kind = "") {
+  const t = document.createElement("div");
+  t.className = "toast " + kind; t.textContent = msg;
+  $("#toasts").append(t);
+  setTimeout(() => t.remove(), kind === "bad" ? 7000 : 3500);
+}
+function ask(title, text, ok = "OK", danger = false) {
+  return new Promise((res) => {
+    $("#cfTitle").textContent = title; $("#cfText").textContent = text;
+    const y = $("#cfYes"); y.textContent = ok; y.className = danger ? "danger" : "primary";
+    const d = $("#confirm"), done = (v) => { d.close(); res(v); };
+    y.onclick = () => done(true); $("#cfNo").onclick = () => done(false); d.oncancel = () => res(false);
+    d.showModal();
+  });
+}
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+let jobs = [], remotes = [], overview = { paused: false, status: {} }, lastHist = [], lastKey = "", dryBusy = new Set();
+
+// ---------- motyw ----------
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  store.set("theme", t);
+  const r = $(`input[name=theme][value=${t}]`); if (r) r.checked = true;
+}
+applyTheme(store.get("theme") || "auto");
+$$("input[name=theme]").forEach((r) => r.addEventListener("change", () => applyTheme(r.value)));
 
 // ---------- nawigacja ----------
-$$("nav button").forEach((b) => b.addEventListener("click", () => {
-  $$("nav button").forEach((x) => x.classList.toggle("active", x === b));
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
-  if (b.dataset.tab === "activity") loadHistory();
-  if (b.dataset.tab === "accounts") loadRemotes();
-}));
+function gotoTab(name) {
+  $$("nav button").forEach((x) => x.classList.toggle("active", x.dataset.tab === name));
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
+  if (name === "activity") loadHistory();
+  if (name === "accounts") loadRemotes();
+}
+$$("nav button").forEach((b) => b.addEventListener("click", () => gotoTab(b.dataset.tab)));
 
 // ---------- zadania ----------
-async function refreshJobs() { jobs = await invoke("list_jobs"); renderJobs(); fillHistJobs(); }
+async function refreshJobs() { jobs = await invoke("list_jobs"); lastKey = ""; renderJobs(); fillHistJobs(); }
 async function refreshStatus() {
-  overview = await invoke("overview");
-  $("#pauseAll").textContent = overview.paused ? "▶ Wznów wszystko" : "⏸ Wstrzymaj wszystko";
+  try { overview = await invoke("overview"); } catch { return; }
+  $("#pauseTxt").textContent = overview.paused ? "Wznów wszystko" : "Wstrzymaj wszystko";
+  $("#pauseAll").firstElementChild.innerHTML = icon(overview.paused ? "play" : "pause");
+  const att = attention();
+  const b = $("#attBadge"); b.hidden = !att; b.textContent = att;
   renderJobs();
   if ($("#tab-activity").classList.contains("active")) renderPending();
 }
+function attention() {
+  let n = 0;
+  for (const j of jobs) { const r = overview.status[j.id]?.last; if (r) n += r.conflicts.length + r.busy.length + r.errors.length; if (overview.status[j.id]?.error) n++; }
+  return n;
+}
+
+function renderTiles() {
+  const active = jobs.filter((j) => j.enabled).length;
+  const last = Math.max(0, ...jobs.map((j) => overview.status[j.id]?.last_run || 0));
+  const att = attention(), running = jobs.filter((j) => overview.status[j.id]?.state === "running").length;
+  const health = overview.paused ? ["Wstrzymane", "warn"] : running ? [`Synchronizuję (${running})`, ""] : att ? ["Są sprawy do przejrzenia", "warn"] : ["Wszystko w porządku", "ok"];
+  $("#tiles").innerHTML = `
+    <div class="tile"><div class="k">Aktywne zadania</div><div class="v">${active}<span class="muted" style="font-size:14px;font-weight:600"> / ${jobs.length}</span></div></div>
+    <div class="tile"><div class="k">Ostatnia synchronizacja</div><div class="v small">${esc(rel(last))}</div></div>
+    <div class="tile ${att ? "warn" : ""}"><div class="k">Wymaga uwagi</div><div class="v">${att}</div></div>
+    <div class="tile ${health[1]}"><div class="k">Stan</div><div class="v small">${esc(health[0])}</div></div>`;
+}
+
+const TEMPLATES = [
+  { id: "two", title: "Synchronizacja dwustronna", text: "Zmiany po obu stronach trafiają na drugą — np. komputer ⇄ NAS.", job: { name: "Synchronizacja dwustronna", mode: "TwoWay", conflict: "KeepBoth" } },
+  { id: "bak", title: "Kopia zapasowa", text: "Lewa → prawa, nic nie jest usuwane po prawej stronie.", job: { name: "Kopia zapasowa", mode: "LeftToRight", no_delete_right: true, conflict: "LeftWins" } },
+  { id: "mir", title: "Lustro (dokładna kopia)", text: "Prawa strona jest identyczna z lewą; usunięte pliki trafiają do kosza.", job: { name: "Lustro", mode: "LeftToRight", conflict: "LeftWins" } },
+];
 
 function renderJobs() {
+  const key = JSON.stringify([jobs, overview, [...dryBusy]]);
+  if (key === lastKey) return;
+  lastKey = key;
+  renderTiles();
   const box = $("#jobs");
-  if (!jobs.length) { box.innerHTML = '<div class="empty">Brak zadań. Kliknij „+ Nowe zadanie”, aby zsynchronizować pierwsze foldery.</div>'; return; }
+  if (!jobs.length) {
+    box.innerHTML = `<div class="box empty"><svg class="big" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${P.sync}</svg>
+      <h2>Zsynchronizuj pierwsze foldery</h2><p class="sub">Wybierz gotowy szablon albo utwórz zadanie od zera.</p>
+      <div class="tpls">${TEMPLATES.map((t) => `<button class="tpl" data-tpl="${t.id}"><b>${esc(t.title)}</b><span>${esc(t.text)}</span></button>`).join("")}</div>
+      <p><button class="primary" id="emptyNew"><span>${icon("plus")}</span>Nowe zadanie</button></p></div>`;
+    return;
+  }
   box.innerHTML = jobs.map((j) => {
     const st = overview.status[j.id] || {};
-    const state = overview.paused && j.enabled ? "paused" : st.state || (j.enabled ? "idle" : "disabled");
-    const rep = st.last;
-    let stats = st.last_run ? `Ostatnio: ${fmtTime(st.last_run)}` : "Jeszcze nie uruchomione";
-    if (rep) stats += ` · skopiowano ${rep.copied}, usunięto ${rep.deleted}` + (rep.conflicts.length ? ` · konflikty ${rep.conflicts.length}` : "") + (rep.busy.length ? ` · zajęte ${rep.busy.length}` : "");
-    if (st.next_run) stats += ` · następne: ${fmtTime(st.next_run)}`;
-    const msg = st.error ? `<div class="err">${esc(st.error)}</div>` : rep?.blocked ? `<div class="err">Zatrzymano: ${esc(rep.blocked)}. Sprawdź symulację; „Wymuś” pominie blokadę.</div>` : "";
-    return `<div class="card" data-id="${esc(j.id)}">
-      <div class="top"><span class="name">${esc(j.name)}</span><span class="chip ${state}">${STATE[state] || state}</span></div>
-      <div class="paths">${esc(j.left)} &nbsp;${MODE[j.mode] || ""}&nbsp; ${esc(j.right)}</div>
-      <div class="stats">${schedText(j.schedule)}${j.no_delete_left ? " · bez usuwania po lewej" : ""}${j.no_delete_right ? " · bez usuwania po prawej" : ""}${j.only_add ? " · tylko dodawanie" : ""}</div>
-      <div class="stats">${stats}</div>${msg}
+    const state = !j.enabled ? "disabled" : overview.paused ? "paused" : st.state || "idle";
+    const rep = st.last, pr = st.progress;
+    let stats = st.last_run ? `Ostatnio ${rel(st.last_run)}` : "Jeszcze nie uruchomione";
+    if (rep) stats += ` · skopiowano ${rep.copied}, usunięto ${rep.deleted}`;
+    if (st.next_run && state !== "disabled") stats += ` · następne ${new Date(st.next_run * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}`;
+    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", j.trash_days > 0 && `kosz ${j.trash_days} dni`, (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
+    let extra = "";
+    if (state === "running") {
+      const pct = pr && pr.total ? Math.round((pr.done / pr.total) * 100) : null;
+      extra = `<div class="bar ${pct === null ? "ind" : ""}"><i style="width:${pct ?? 35}%"></i></div><div class="cur">${pr ? `${pr.done}/${pr.total} · ${esc(pr.current)}` : "Skanowanie…"}</div>`;
+    }
+    if (st.error) extra += `<div class="msg">${esc(st.error)}</div>`;
+    else if (rep?.blocked) extra += `<div class="msg warn"><b>Zatrzymano ze względów bezpieczeństwa:</b> ${esc(rep.blocked)}. Sprawdź „Symulację”; „Wymuś” pominie blokadę.</div>`;
+    else if (rep?.busy.length) extra += `<div class="msg warn">${rep.busy.length} plik(ów) jest zajętych przez inne programy — ponowię automatycznie.</div>`;
+    else if (rep?.conflicts.length) extra += `<div class="msg warn">${rep.conflicts.length} konflikt(ów) czeka na decyzję w zakładce „Aktywność”.</div>`;
+    const loc = (side, p) => `<div class="loc"><div class="ic">${icon(locKind(p))}</div><div class="t"><b>${side}</b><span title="${esc(p)}">${esc(p)}</span></div></div>`;
+    return `<div class="card s-${state}" data-id="${esc(j.id)}">
+      <div class="top"><span class="name">${esc(j.name)}</span><span class="pill ${state}">${STATE[state]}</span></div>
+      <div class="route">${loc("Lewa", j.left)}<div class="dir">${icon(DIRICON[j.mode])}</div>${loc("Prawa", j.right)}</div>
+      <div class="tags">${tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
+      ${extra}<div class="meta">${esc(stats)}</div>
       <div class="actions">
-        <button data-act="run">▶ Uruchom teraz</button>
-        <button data-act="dry">🔍 Symulacja</button>
-        ${rep?.blocked ? '<button data-act="force">Wymuś</button>' : ""}
-        <button data-act="edit">✎ Edytuj</button>
-        <button data-act="toggle">${j.enabled ? "Wyłącz" : "Włącz"}</button>
-        <button data-act="del" class="danger">Usuń</button>
+        <button class="primary sm" data-act="run" ${state === "running" ? "disabled" : ""}>${icon("play")}Uruchom</button>
+        <button class="sm" data-act="dry" ${dryBusy.has(j.id) ? "disabled" : ""}>${icon("search")}${dryBusy.has(j.id) ? "Liczę…" : "Symulacja"}</button>
+        ${rep?.blocked ? `<button class="sm" data-act="force">${icon("shield")}Wymuś</button>` : ""}
+        <button class="sm" data-act="edit">${icon("edit")}Edytuj</button>
+        <button class="sm" data-act="toggle">${icon("power")}${j.enabled ? "Wyłącz" : "Włącz"}</button>
+        <button class="sm danger" data-act="del">${icon("trash")}Usuń</button>
       </div></div>`;
   }).join("");
 }
 
 $("#jobs").addEventListener("click", async (e) => {
+  const tpl = e.target.closest("[data-tpl]");
+  if (tpl) return openEditor(null, TEMPLATES.find((t) => t.id === tpl.dataset.tpl).job);
+  if (e.target.closest("#emptyNew")) return openEditor(null);
   const b = e.target.closest("button[data-act]"); if (!b) return;
   const id = b.closest(".card").dataset.id, job = jobs.find((j) => j.id === id);
   try {
     switch (b.dataset.act) {
-      case "run": await invoke("run_now", { id, force: false }); break;
+      case "run": await invoke("run_now", { id, force: false }); toast("Uruchomiono: " + job.name); break;
       case "force":
-        if (confirm("Wymusić synchronizację mimo zabezpieczenia? Pliki usuwane/nadpisywane trafią do kosza synchronizacji (jeśli włączony).")) await invoke("run_now", { id, force: true });
+        if (await ask("Wymusić synchronizację?", "Zabezpieczenie zatrzymało to zadanie, bo plan wygląda podejrzanie (np. masowe usuwanie albo pusta strona). Pliki usuwane/nadpisywane trafią do kosza synchronizacji, jeśli jest włączony.", "Wymuś", true)) await invoke("run_now", { id, force: true });
         break;
-      case "dry": b.textContent = "Liczę…"; showReport(job.name, await invoke("dry_run", { id })); b.textContent = "🔍 Symulacja"; break;
+      case "dry": dryBusy.add(id); renderJobs(); try { showReport(job.name, await invoke("dry_run", { id })); } finally { dryBusy.delete(id); renderJobs(); } break;
       case "edit": openEditor(job); break;
       case "toggle": await invoke("save_job", { job: { ...job, enabled: !job.enabled } }); await refreshJobs(); break;
-      case "del": if (confirm(`Usunąć zadanie „${job.name}”? Pliki nie zostaną usunięte.`)) { await invoke("delete_job", { id }); await refreshJobs(); } break;
+      case "del": if (await ask("Usunąć zadanie?", `Zadanie „${job.name}” zostanie usunięte. Pliki na dyskach nie zostaną ruszone.`, "Usuń", true)) { await invoke("delete_job", { id }); await refreshJobs(); toast("Zadanie usunięte"); } break;
     }
-  } catch (err) { toast(String(err)); renderJobs(); }
+  } catch (err) { toast(String(err), "bad"); }
   refreshStatus();
 });
 
 function showReport(title, r) {
   $("#repTitle").textContent = "Symulacja: " + title;
-  const rows = r.planned.map(([k, a]) => `<tr><td>${ACTION(a)}${a.Conflict ? (a.Conflict.keep_both ? " (zachowaj obie)" : " (do decyzji)") : ""}</td><td>${esc(k)}</td></tr>`).join("");
-  $("#repBody").innerHTML = `<p>Przeskanowano: ${r.scanned_left} plików po lewej, ${r.scanned_right} po prawej. Planowanych działań: <b>${r.planned.length}</b>.</p>` +
-    (r.blocked ? `<p class="err">Zabezpieczenie zatrzymałoby synchronizację: ${esc(r.blocked)}</p>` : "") +
-    (r.errors.length ? `<p class="err">${r.errors.map(esc).join("<br>")}</p>` : "") +
-    (rows ? `<table><tbody>${rows}</tbody></table>` : '<p class="muted">Obie strony są zgodne.</p>');
+  const rows = r.planned.map(([k, a]) => `<tr><td><span class="kind ${typeof a === "string" && a.startsWith("Delete") ? "warn" : typeof a !== "string" ? "bad" : "ok"}">${ACTION(a)}</span></td><td>${esc(k)}</td></tr>`).join("");
+  $("#repBody").innerHTML = `<p>Przeskanowano: <b>${r.scanned_left}</b> plików po lewej i <b>${r.scanned_right}</b> po prawej. Planowanych działań: <b>${r.planned.length}</b>. <span class="muted">Nic nie zostało zmienione.</span></p>` +
+    (r.blocked ? `<div class="msg warn"><b>Zabezpieczenie zatrzymałoby synchronizację:</b> ${esc(r.blocked)}</div>` : "") +
+    (r.errors.length ? `<div class="msg">${r.errors.map(esc).join("<br>")}</div>` : "") +
+    (rows ? `<div class="scroll" style="margin-top:12px"><table><tbody>${rows}</tbody></table></div>` : '<p class="muted">Obie strony są zgodne — nic do zrobienia.</p>');
   $("#report").showModal();
 }
 $("#repClose").onclick = () => $("#report").close();
 
-// ---------- edytor ----------
+// ---------- kreator zadania ----------
 const F = () => $("#jobForm").elements;
-function openEditor(job) {
+const STEP_NAMES = ["Krok 1 z 4 · Lokalizacje", "Krok 2 z 4 · Kierunek i usuwanie", "Krok 3 z 4 · Filtry plików", "Krok 4 z 4 · Harmonogram i podsumowanie"];
+let step = 0;
+const DEFAULT_JOB = { id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
+
+function openEditor(job, tpl) {
   const f = F(); $("#edErr").textContent = "";
   $("#edTitle").textContent = job ? "Edytuj zadanie" : "Nowe zadanie";
-  const j = job || { id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
+  const j = job || { ...DEFAULT_JOB, ...(tpl || {}) };
   f.name.value = j.name; f.left.value = j.left; f.right.value = j.right; f.mode.value = j.mode; f.conflict.value = j.conflict;
   f.no_delete_left.checked = !!j.no_delete_left; f.no_delete_right.checked = !!j.no_delete_right; f.only_add.checked = !!j.only_add;
   f.include.value = (j.include || []).join("\n"); f.exclude.value = (j.exclude || []).join("\n");
@@ -103,42 +219,39 @@ function openEditor(job) {
   f.sched_val.value = j.schedule.type === "Interval" ? Math.round(j.schedule.secs / 60) : j.schedule.type === "Daily" ? `${String(j.schedule.hour).padStart(2, "0")}:${String(j.schedule.minute).padStart(2, "0")}` : j.schedule.type === "Realtime" ? Math.round(j.schedule.poll_secs / 60) : "";
   f.win_from.value = j.window ? j.window[0] : ""; f.win_to.value = j.window ? j.window[1] : "";
   f.trash_days.value = j.trash_days; f.guard_pct.value = j.guard_pct; f.threads.value = j.threads; f.enabled.checked = j.enabled;
-  $("#jobForm").dataset.id = j.id;
-  schedHint(); $("#editor").showModal();
+  $("#jobForm").dataset.id = j.id || "";
+  $$("[data-hint]").forEach((h) => (h.textContent = ""));
+  schedHint(); showStep(0); $("#editor").showModal(); f.name.focus();
+}
+function showStep(n) {
+  step = n;
+  $$(".step").forEach((s) => s.classList.toggle("on", +s.dataset.step === n));
+  $$("#steps span").forEach((s, i) => s.classList.toggle("on", i <= n));
+  $("#stepName").textContent = STEP_NAMES[n];
+  $("#edBack").hidden = n === 0; $("#edNext").hidden = n === 3; $("#edSave").hidden = n !== 3;
+  if (n === 3) $("#summary").innerHTML = summarize(readJob());
 }
 function schedHint() {
   const f = F(), t = f.sched.value, l = $("#schedVal");
   l.style.display = t === "Manual" ? "none" : "";
-  l.firstChild.textContent = t === "Interval" ? "Co ile minut" : t === "Daily" ? "Godzina (GG:MM)" : "Dodatkowe sprawdzanie co ile minut (dyski sieciowe/chmura)";
+  $("#schedLbl").textContent = t === "Interval" ? "Co ile minut" : t === "Daily" ? "O której godzinie (GG:MM)" : "Dodatkowe sprawdzanie co ile minut (dyski sieciowe i chmura)";
   f.sched_val.placeholder = t === "Daily" ? "02:30" : "5";
 }
-$("#jobForm").elements.sched.addEventListener("change", schedHint);
-$("#newJob").onclick = () => openEditor(null);
-$("#edCancel").onclick = () => $("#editor").close();
+$$("input[name=sched]").forEach((r) => r.addEventListener("change", schedHint));
 
-$$("button[data-pick]").forEach((b) => b.addEventListener("click", async () => {
-  const dir = await dialogApi.open({ directory: true, multiple: false, title: "Wybierz folder" });
-  if (dir) F()[b.dataset.pick].value = dir;
-}));
-$$("select[data-remote]").forEach((s) => s.addEventListener("change", () => { if (s.value) F()[s.dataset.remote].value = s.value + ":"; s.value = ""; }));
-function fillRemoteSelects() {
-  $$("select[data-remote]").forEach((s) => { s.innerHTML = '<option value="">Konto chmurowe…</option>' + remotes.map((r) => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.kind)})</option>`).join(""); });
-}
-
-$("#jobForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = F(), lines = (v) => v.split("\n").map((x) => x.trim()).filter(Boolean);
-  const num = (v) => (v === "" ? null : Number(v));
+function readJob() {
+  const f = F(), lines = (v) => v.split("\n").map((x) => x.trim()).filter(Boolean), num = (v) => (v === "" ? null : Number(v));
   const t = f.sched.value, v = f.sched_val.value.trim();
   let schedule;
   if (t === "Manual") schedule = { type: "Manual" };
   else if (t === "Interval") schedule = { type: "Interval", secs: Math.max(1, Number(v) || 15) * 60 };
-  else if (t === "Daily") { const m = /^(\d{1,2}):(\d{2})$/.exec(v); if (!m) { $("#edErr").textContent = "Podaj godzinę w formacie GG:MM."; return; } schedule = { type: "Daily", hour: +m[1], minute: +m[2] }; }
+  else if (t === "Daily") { const m = /^(\d{1,2}):(\d{2})$/.exec(v); schedule = { type: "Daily", hour: m ? +m[1] : 2, minute: m ? +m[2] : 0, bad: !m }; }
   else schedule = { type: "Realtime", poll_secs: Math.max(1, Number(v) || 5) * 60 };
   const from = num(f.win_from.value), to = num(f.win_to.value);
-  const job = {
+  const left = f.left.value.trim(), right = f.right.value.trim();
+  return {
     id: $("#jobForm").dataset.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
-    name: f.name.value.trim(), left: f.left.value.trim(), right: f.right.value.trim(), mode: f.mode.value, conflict: f.conflict.value,
+    name: f.name.value.trim() || `${left} ⇄ ${right}`, left, right, mode: f.mode.value, conflict: f.conflict.value,
     no_delete_left: f.no_delete_left.checked, no_delete_right: f.no_delete_right.checked, only_add: f.only_add.checked,
     include: lines(f.include.value), exclude: lines(f.exclude.value),
     min_size: f.min_mb.value === "" ? null : Math.round(Number(f.min_mb.value) * 1048576),
@@ -146,8 +259,53 @@ $("#jobForm").addEventListener("submit", async (e) => {
     schedule, window: from !== null && to !== null ? [from, to] : null, enabled: f.enabled.checked,
     guard_pct: Number(f.guard_pct.value) || 25, trash_days: Number(f.trash_days.value) || 0, threads: Number(f.threads.value) || 4,
   };
-  try { await invoke("save_job", { job }); $("#editor").close(); await refreshJobs(); refreshStatus(); }
-  catch (err) { $("#edErr").textContent = String(err); }
+}
+function summarize(j) {
+  const L = `<b>${esc(j.left || "lewa")}</b>`, R = `<b>${esc(j.right || "prawa")}</b>`, li = [];
+  li.push(j.mode === "TwoWay" ? `Zmiany z ${L} i ${R} są przenoszone na drugą stronę.` : j.mode === "LeftToRight" ? `Pliki z ${L} są kopiowane do ${R}.` : `Pliki z ${R} są kopiowane do ${L}.`);
+  if (j.only_add) li.push("Nic nie jest nadpisywane ani usuwane — tylko nowe pliki są dodawane.");
+  else {
+    if (j.no_delete_left) li.push("Po lewej stronie nic nie jest usuwane.");
+    if (j.no_delete_right) li.push("Po prawej stronie nic nie jest usuwane.");
+    if (!j.no_delete_left && !j.no_delete_right) li.push(j.trash_days > 0 ? `Usunięte i nadpisane pliki trafiają do kosza na ${j.trash_days} dni.` : "Usunięte pliki są kasowane bez kosza.");
+  }
+  li.push(`Uruchamianie: ${schedText(j.schedule)}${j.window ? `, tylko w godzinach ${j.window[0]}:00–${j.window[1]}:00` : ""}.`);
+  return `<b>Jak to będzie działać</b><ul>${li.map((x) => `<li>${x}</li>`).join("")}</ul>`;
+}
+function validateStep(n) {
+  const f = F();
+  if (n === 0) {
+    if (!f.left.value.trim() || !f.right.value.trim()) return "Podaj obie lokalizacje.";
+    if (f.left.value.trim() === f.right.value.trim()) return "Lewa i prawa lokalizacja nie mogą być takie same.";
+  }
+  if (n === 3 && f.sched.value === "Daily" && !/^(\d{1,2}):(\d{2})$/.test(f.sched_val.value.trim())) return "Podaj godzinę w formacie GG:MM, np. 02:30.";
+  return "";
+}
+$("#edNext").onclick = () => { const e = validateStep(step); $("#edErr").textContent = e; if (!e) showStep(step + 1); };
+$("#edBack").onclick = () => { $("#edErr").textContent = ""; showStep(step - 1); };
+$("#edCancel").onclick = () => $("#editor").close();
+$("#newJob").onclick = () => openEditor(null);
+
+$$("button[data-pick]").forEach((b) => b.addEventListener("click", async () => {
+  try { const dir = await dialogApi.open({ directory: true, multiple: false, title: "Wybierz folder" }); if (dir) { F()[b.dataset.pick].value = dir; checkPath(b.dataset.pick); } } catch (e) { toast(String(e), "bad"); }
+}));
+$$("select[data-remote]").forEach((s) => s.addEventListener("change", () => { if (s.value) F()[s.dataset.remote].value = s.value + ":"; s.value = ""; }));
+async function checkPath(side) {
+  const v = F()[side].value.trim(), h = $(`[data-hint=${side}]`);
+  h.textContent = v ? (await invoke("check_path", { path: v }).catch(() => null)) || "" : "";
+}
+["left", "right"].forEach((s) => F()[s].addEventListener("change", () => checkPath(s)));
+function fillRemoteSelects() {
+  $$("select[data-remote]").forEach((s) => { s.innerHTML = '<option value="">Konto chmurowe…</option>' + remotes.map((r) => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.kind)})</option>`).join(""); });
+}
+
+$("#jobForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (step < 3) return $("#edNext").click();
+  const err = validateStep(3); if (err) { $("#edErr").textContent = err; return; }
+  const job = readJob(); delete job.schedule.bad;
+  try { await invoke("save_job", { job }); $("#editor").close(); await refreshJobs(); refreshStatus(); toast("Zadanie zapisane", "ok"); }
+  catch (er) { $("#edErr").textContent = String(er); }
 });
 
 // ---------- aktywność ----------
@@ -156,74 +314,89 @@ function fillHistJobs() {
   $("#histJob").innerHTML = '<option value="">Wszystkie zadania</option>' + jobs.map((j) => `<option value="${esc(j.id)}">${esc(j.name)}</option>`).join("");
   $("#histJob").value = cur;
 }
+const kindClass = (k) => (/błąd/.test(k) ? "bad" : /zajęty|konflikt/.test(k) ? "warn" : /kopiowanie|rozstrzygn/.test(k) ? "ok" : "");
 async function loadHistory() {
-  try { lastHist = await invoke("history", { job: $("#histJob").value || null, limit: 500 }); } catch (e) { lastHist = []; }
-  const name = (id) => jobs.find((j) => j.id === id)?.name || id;
-  $("#hist tbody").innerHTML = lastHist.map((h) => `<tr><td>${fmtTime(h.ts)}</td><td>${esc(name(h.job))}</td><td>${esc(h.kind)}</td><td>${esc(h.path)}</td><td>${esc(h.detail)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">Brak wpisów.</td></tr>';
-  renderPending();
+  try { lastHist = await invoke("history", { job: $("#histJob").value || null, limit: 500 }); } catch { lastHist = []; }
+  renderHistory(); renderPending();
+}
+function renderHistory() {
+  const q = $("#histQ").value.trim().toLowerCase(), name = (id) => jobs.find((j) => j.id === id)?.name || id;
+  const rows = lastHist.filter((h) => !q || `${h.kind} ${h.path} ${h.detail} ${name(h.job)}`.toLowerCase().includes(q));
+  $("#hist tbody").innerHTML = rows.map((h) => `<tr><td>${fmtTime(h.ts)}</td><td>${esc(name(h.job))}</td><td><span class="kind ${kindClass(h.kind)}">${esc(h.kind)}</span></td><td>${esc(h.path)}</td><td class="muted">${esc(h.detail)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">Brak wpisów.</td></tr>';
 }
 function renderPending() {
   const out = [];
   for (const j of jobs) {
-    const r = overview.status[j.id]?.last; if (!r) continue;
-    r.busy.forEach((p) => out.push(`<tr><td>${esc(j.name)}</td><td>${esc(p)}</td><td>plik zajęty przez inny program — ponowię automatycznie</td></tr>`));
-    r.conflicts.forEach((p) => out.push(`<tr><td>${esc(j.name)}</td><td>${esc(p)}</td><td>konflikt — zmiany po obu stronach</td></tr>`));
-    r.errors.forEach((p) => out.push(`<tr><td>${esc(j.name)}</td><td colspan="2">${esc(p)}</td></tr>`));
+    const st = overview.status[j.id], r = st?.last; if (!r) continue;
+    r.conflicts.forEach((p) => out.push(`<tr><td><span class="kind warn">konflikt</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted">zmieniono po obu stronach</td><td style="white-space:nowrap"><button class="sm" data-res="left" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj lewą</button> <button class="sm" data-res="right" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj prawą</button></td></tr>`));
+    r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString("pl-PL") + ")" : ""}</td></tr>`));
+    r.errors.forEach((p) => out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(p)}</td></tr>`));
+    if (st.error) out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(st.error)}</td></tr>`);
   }
-  $("#pending").innerHTML = out.length ? `<table><tbody>${out.join("")}</tbody></table>` : '<span class="muted">Nic nie oczekuje.</span>';
+  $("#pending").innerHTML = out.length ? `<table><tbody>${out.join("")}</tbody></table>` : '<span class="muted">✓ Nic nie czeka na Twoją uwagę.</span>';
 }
+$("#pending").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-res]"); if (!b) return;
+  b.disabled = true;
+  try { await invoke("resolve_conflict", { id: b.dataset.job, path: b.dataset.path, leftWins: b.dataset.res === "left" }); toast("Konflikt rozstrzygnięty", "ok"); }
+  catch (er) { toast(String(er), "bad"); }
+  loadHistory(); refreshStatus();
+});
 $("#histJob").onchange = loadHistory;
+$("#histQ").oninput = renderHistory;
 $("#exportCsv").onclick = () => {
   const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
-  const csv = "\ufeff" + ["czas;zadanie;operacja;plik;szczegóły", ...lastHist.map((h) => [fmtTime(h.ts), jobs.find((j) => j.id === h.job)?.name || h.job, h.kind, h.path, h.detail].map(q).join(";"))].join("\r\n");
+  const csv = "﻿" + ["czas;zadanie;operacja;plik;szczegóły", ...lastHist.map((h) => [fmtTime(h.ts), jobs.find((j) => j.id === h.job)?.name || h.job, h.kind, h.path, h.detail].map(q).join(";"))].join("\r\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); a.download = "syncpolak-historia.csv"; a.click();
 };
 
 // ---------- konta ----------
-const FIELDS = {
-  drive: [], onedrive: [],
-  bitrix: [["url", "Adres WebDAV z Bitrix24 (np. https://firma.bitrix24.pl/company/personal/user/1/disk/path/)"], ["user", "Login"], ["pass", "Hasło (lub hasło aplikacji)", "password"]],
-  webdav: [["url", "Adres WebDAV"], ["user", "Login"], ["pass", "Hasło", "password"]],
-  sftp: [["host", "Serwer"], ["user", "Login"], ["pass", "Hasło", "password"], ["port", "Port (22)"]],
-};
-function renderFields() {
-  const t = $("#rType").value;
-  $("#rFields").innerHTML = (FIELDS[t].map(([k, l, ty]) => `<label>${esc(l)}<input data-f="${k}" type="${ty || "text"}"></label>`).join("")) ||
-    '<p class="muted">Po kliknięciu „Połącz konto” otworzy się przeglądarka z logowaniem.</p>';
-}
-$("#rType").onchange = renderFields;
+const PROVIDERS = [
+  { id: "drive", name: "Google Drive", info: "Logowanie w przeglądarce", color: "#4285f4", mark: "G", kind: "drive", suggest: "gdrive", fields: [] },
+  { id: "onedrive", name: "OneDrive / SharePoint", info: "Logowanie w przeglądarce", color: "#0078d4", mark: "O", kind: "onedrive", suggest: "onedrive", fields: [] },
+  { id: "bitrix", name: "Bitrix24 Dysk", info: "WebDAV: adres, login, hasło", color: "#2fc6f6", mark: "B", kind: "webdav", suggest: "bitrix", extra: { vendor: "other" },
+    fields: [["url", "Adres WebDAV (Bitrix24 → Dysk → „Połącz dysk sieciowy”)", "https://firma.bitrix24.pl/company/personal/user/1/disk/path/"], ["user", "Login"], ["pass", "Hasło lub hasło aplikacji", "", "password"]] },
+  { id: "webdav", name: "WebDAV / Nextcloud", info: "Adres, login, hasło", color: "#64748b", mark: "W", kind: "webdav", suggest: "webdav", extra: { vendor: "other" }, fields: [["url", "Adres WebDAV"], ["user", "Login"], ["pass", "Hasło", "", "password"]] },
+  { id: "sftp", name: "SFTP", info: "Serwer, login, hasło", color: "#16a34a", mark: "S", kind: "sftp", suggest: "sftp", fields: [["host", "Serwer"], ["user", "Login"], ["pass", "Hasło", "", "password"], ["port", "Port", "22"]] },
+];
+let prov = null;
+$("#providers").innerHTML = PROVIDERS.map((p) => `<button class="prov" data-p="${p.id}"><span class="pi" style="background:${p.color}">${p.mark}</span><b>${esc(p.name)}</b><span class="muted" style="font-weight:500;font-size:12px">${esc(p.info)}</span></button>`).join("");
+$("#providers").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-p]"); if (!b) return;
+  prov = PROVIDERS.find((p) => p.id === b.dataset.p);
+  $$(".prov").forEach((x) => x.classList.toggle("sel", x === b));
+  $("#rForm").hidden = false; $("#rName").value = prov.suggest; $("#rMsg").textContent = "";
+  $("#rFields").innerHTML = prov.fields.map(([k, l, ph, ty]) => `<label>${esc(l)}<input data-f="${k}" type="${ty || "text"}" placeholder="${esc(ph || "")}"></label>`).join("") ||
+    '<p class="muted">Po kliknięciu „Połącz konto” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>';
+});
 $("#rAdd").onclick = async () => {
-  const t = $("#rType").value, params = {};
+  const params = { ...(prov.extra || {}) };
   $$("#rFields input").forEach((i) => (params[i.dataset.f] = i.value.trim()));
-  let kind = t;
-  if (t === "bitrix") { kind = "webdav"; params.vendor = "other"; }
-  if (t === "webdav") params.vendor = "other";
   $("#rMsg").textContent = "Łączenie… (dokończ logowanie w przeglądarce, jeśli się otworzyła)"; $("#rAdd").disabled = true;
-  try { await invoke("add_remote", { name: $("#rName").value.trim(), kind, params }); $("#rMsg").textContent = "Konto dodane."; await loadRemotes(); }
+  try { await invoke("add_remote", { name: $("#rName").value.trim(), kind: prov.kind, params }); $("#rMsg").textContent = ""; $("#rForm").hidden = true; toast("Konto dodane", "ok"); await loadRemotes(); }
   catch (e) { $("#rMsg").textContent = "Błąd: " + e; }
   $("#rAdd").disabled = false;
 };
 async function loadRemotes() {
-  try { remotes = await invoke("list_remotes"); } catch (e) { remotes = []; }
+  try { remotes = await invoke("list_remotes"); } catch { remotes = []; }
   fillRemoteSelects();
-  $("#remotes").innerHTML = remotes.length ? `<table><tbody>${remotes.map((r) => `<tr><td><b>${esc(r.name)}:</b></td><td>${esc(r.kind)}</td><td><button data-t="${esc(r.name)}">Testuj</button> <button class="danger" data-d="${esc(r.name)}">Usuń</button></td></tr>`).join("")}</tbody></table>` : '<span class="muted">Brak kont.</span>';
+  $("#remotes").innerHTML = remotes.length ? remotes.map((r) => `<div class="remote"><span class="loc" style="padding:0;border:0;background:none"><span class="ic">${icon("cloud")}</span></span><div class="grow"><b>${esc(r.name)}:</b> <span class="muted">${esc(r.kind)}</span></div><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button></div>`).join("") : '<span class="muted">Brak połączonych kont. Wybierz usługę poniżej.</span>';
 }
 $("#remotes").addEventListener("click", async (e) => {
-  const t = e.target.dataset.t, d = e.target.dataset.d;
+  const t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d;
   try {
-    if (t) toast(await invoke("test_remote", { name: t }));
-    if (d && confirm(`Usunąć konto „${d}”?`)) { await invoke("delete_remote", { name: d }); await loadRemotes(); }
-  } catch (err) { toast("Błąd: " + err); }
+    if (t) { e.target.disabled = true; toast(await invoke("test_remote", { name: t }), "ok"); e.target.disabled = false; }
+    if (d && (await ask("Usunąć konto?", `Konto „${d}” zostanie usunięte z aplikacji (dane w chmurze zostają).`, "Usuń", true))) { await invoke("delete_remote", { name: d }); await loadRemotes(); }
+  } catch (err) { toast("Błąd: " + err, "bad"); loadRemotes(); }
 });
 
-// ---------- ustawienia ----------
+// ---------- ustawienia i start ----------
 $("#pauseAll").onclick = async () => { await invoke("set_paused", { paused: !overview.paused }); refreshStatus(); };
 (async () => {
-  try { $("#autostart").checked = await autostart.isEnabled(); } catch (e) {}
-  $("#autostart").onchange = async (e) => { try { e.target.checked ? await autostart.enable() : await autostart.disable(); } catch (err) { toast(String(err)); } };
-  try { $("#rcv").textContent = await invoke("rclone_version"); } catch (e) { $("#rcv").textContent = "rclone niedostępny (lokalne foldery i dyski sieciowe działają, chmury wymagają rclone)"; }
+  try { $("#autostart").checked = await autostart.isEnabled(); } catch {}
+  $("#autostart").onchange = async (e) => { try { e.target.checked ? await autostart.enable() : await autostart.disable(); } catch (err) { toast(String(err), "bad"); } };
+  try { $("#rcv").textContent = await invoke("rclone_version"); } catch { $("#rcv").textContent = "niedostępny (foldery lokalne i dyski sieciowe działają; chmury wymagają rclone)"; }
 })();
-
-// ---------- start ----------
-renderFields(); loadRemotes(); refreshJobs().then(refreshStatus);
+hydrateIcons();
+loadRemotes(); refreshJobs().then(refreshStatus);
 setInterval(refreshStatus, 2000);

@@ -23,7 +23,9 @@ Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
 - Reguły: maski (uwzględnij/wyklucz), rozmiar min/max; pomijane pliki tymczasowe (`~$*`, `.tmp`, `.DS_Store`, `Thumbs.db`…).
 - Zabezpieczenia: symulacja, kosz synchronizacji (domyślnie 30 dni), blokada masowego usuwania i pustej strony.
 - Harmonogram: na bieżąco, co N minut, codziennie o godzinie, okno godzin, ręcznie; autostart; praca w zasobniku.
-- Historia operacji z eksportem CSV.
+- Historia operacji z eksportem CSV i wyszukiwaniem.
+- Interfejs: jasny/ciemny motyw, kreator zadania w 4 krokach z opisem „jak to będzie działać”, szablony (dwustronna, kopia zapasowa, lustro),
+  postęp synchronizacji na żywo, ręczne rozstrzyganie konfliktów („Zachowaj lewą/prawą”), podpowiedzi o niedostępnych folderach.
 
 ## Chmury
 Połączenia z chmurami obsługuje dołączony do instalatora [rclone](https://rclone.org). Konta dodajesz w zakładce

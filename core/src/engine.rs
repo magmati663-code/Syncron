@@ -222,7 +222,20 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
     }
 }
 
+/// Postęp wykonywania: (zrobione, wszystkie, bieżący plik).
+pub type ProgressFn<'a> = &'a (dyn Fn(usize, usize, &str) + Sync);
+
 pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::Result<Report> {
+    run_job_with(job, state_dir, dry, force, None)
+}
+
+pub fn run_job_with(
+    job: &Job,
+    state_dir: &Path,
+    dry: bool,
+    force: bool,
+    progress: Option<ProgressFn>,
+) -> anyhow::Result<Report> {
     let mut rep = Report {
         started: chrono::Local::now().timestamp(),
         dry_run: dry,
@@ -288,6 +301,8 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
         date: &date,
     };
 
+    let total = actions.len();
+    let done = std::sync::atomic::AtomicUsize::new(0);
     let queue = Mutex::new(
         actions
             .iter()
@@ -302,6 +317,10 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
                 let Some((k, a)) = item else { break };
                 let o = exec(&k, &a, &ctx);
                 results.lock().unwrap().push(o);
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if let Some(p) = progress {
+                    p(n, total, &k);
+                }
             });
         }
     });
@@ -377,4 +396,53 @@ pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::R
         r.purge_trash(job.trash_days);
     }
     Ok(rep)
+}
+
+/// Ręczne rozstrzygnięcie konfliktu: wygrywa wybrana strona (przegrana wersja trafia do kosza).
+pub fn resolve_conflict(
+    job: &Job,
+    state_dir: &Path,
+    path: &str,
+    left_wins: bool,
+) -> anyhow::Result<()> {
+    let (l, r) = (Location::parse(&job.left), Location::parse(&job.right));
+    let rules = job.rules();
+    let key = names::key(path);
+    let (ll, rl) = (
+        l.list(&rules).map_err(anyhow::Error::msg)?,
+        r.list(&rules).map_err(anyhow::Error::msg)?,
+    );
+    let (le, re) = match (ll.files.get(&key), rl.files.get(&key)) {
+        (Some(a), Some(b)) => (a, b),
+        _ => anyhow::bail!("plik nie istnieje już po obu stronach"),
+    };
+    let trash = if job.trash_days > 0 {
+        chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string()
+    } else {
+        String::new()
+    };
+    let (lm, rm) = if left_wins {
+        copy_one(&l, le, &r, Some(re), &trash).map_err(|e| anyhow::anyhow!(e.to_string()))?
+    } else {
+        let (b, a) =
+            copy_one(&r, re, &l, Some(le), &trash).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        (a, b)
+    };
+    let db = open_db(state_dir)?;
+    db.execute(
+        "INSERT OR REPLACE INTO base(job,key,lsize,lmtime,rsize,rmtime) VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            job.id,
+            key,
+            lm.size as i64,
+            lm.mtime,
+            rm.size as i64,
+            rm.mtime
+        ],
+    )?;
+    db.execute(
+        "INSERT INTO history(ts,job,kind,path,detail) VALUES(?1,?2,'konflikt rozstrzygnięty',?3,?4)",
+        params![chrono::Local::now().timestamp(), job.id, path, if left_wins { "wygrała lewa strona" } else { "wygrała prawa strona" }],
+    )?;
+    Ok(())
 }

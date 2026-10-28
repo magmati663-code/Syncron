@@ -1,5 +1,5 @@
 //! Uruchamianie zadań: watcher zdarzeń z debouncingiem, polling, interwały, harmonogram dzienny, okna czasowe, ponowienia.
-use crate::engine::{run_job, Report};
+use crate::engine::{run_job_with, Report};
 use crate::location::{Location, TRASH_DIR};
 use crate::model::{Job, Schedule};
 use crate::names;
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 enum Msg {
@@ -20,8 +20,16 @@ enum Msg {
     Stop,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Progress {
+    pub done: usize,
+    pub total: usize,
+    pub current: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Status {
+    pub progress: Option<Progress>,
     /// idle | running | waiting (pliki zajęte, ponowienie) | error | blocked | paused | disabled
     pub state: String,
     pub last_run: Option<i64>,
@@ -32,14 +40,26 @@ pub struct Status {
 
 struct Handle {
     tx: Sender<Msg>,
-    th: Option<JoinHandle<()>>,
 }
 
 #[derive(Default)]
 struct Inner {
     handles: Mutex<HashMap<String, Handle>>,
     status: Mutex<HashMap<String, Status>>,
+    locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     paused: AtomicBool,
+}
+
+impl Inner {
+    /// Blokada zadania: nigdy dwa przebiegi tego samego zadania naraz (np. po edycji w trakcie synchronizacji).
+    fn lock_for(&self, id: &str) -> Arc<Mutex<()>> {
+        self.locks
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
+    }
 }
 
 #[derive(Clone)]
@@ -96,24 +116,17 @@ impl Runner {
             job.id.clone(),
         );
         self.set(&id, |s| s.state = "idle".into());
-        let th = thread::Builder::new()
+        let _ = thread::Builder::new()
             .name(format!("job-{id}"))
             .spawn(move || job_loop(job, rx, tx2, inner, dir))
             .ok();
-        self.inner
-            .handles
-            .lock()
-            .unwrap()
-            .insert(id, Handle { tx, th });
+        self.inner.handles.lock().unwrap().insert(id, Handle { tx });
     }
 
     pub fn stop(&self, id: &str) {
-        let h = self.inner.handles.lock().unwrap().remove(id);
-        if let Some(mut h) = h {
+        // wątek kończy się po bieżącym przebiegu; nie blokujemy interfejsu czekaniem na niego
+        if let Some(h) = self.inner.handles.lock().unwrap().remove(id) {
             let _ = h.tx.send(Msg::Stop);
-            if let Some(t) = h.th.take() {
-                let _ = t.join();
-            }
         }
     }
 
@@ -142,6 +155,13 @@ impl Runner {
 
     pub fn status(&self) -> HashMap<String, Status> {
         self.inner.status.lock().unwrap().clone()
+    }
+
+    /// Wykonuje `f` z blokadą zadania (np. ręczne rozstrzygnięcie konfliktu).
+    pub fn with_job_lock<T>(&self, id: &str, f: impl FnOnce() -> T) -> T {
+        let l = self.inner.lock_for(id);
+        let _g = l.lock().unwrap();
+        f()
     }
 
     pub fn state_dir(&self) -> &Path {
@@ -254,11 +274,26 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                 return;
             }
         }
-        set_status(&inner, &job.id, |s| s.state = "running".into());
-        let res = run_job(&job, &dir, false, force);
+        let lock = inner.lock_for(&job.id);
+        let _guard = lock.lock().unwrap();
+        set_status(&inner, &job.id, |s| {
+            s.state = "running".into();
+            s.progress = None;
+        });
+        let report = |done: usize, total: usize, cur: &str| {
+            set_status(&inner, &job.id, |s| {
+                s.progress = Some(Progress {
+                    done,
+                    total,
+                    current: cur.to_string(),
+                })
+            });
+        };
+        let res = run_job_with(&job, &dir, false, force, Some(&report));
         let mut retry = None;
         set_status(&inner, &job.id, |s| {
             s.last_run = Some(Local::now().timestamp());
+            s.progress = None;
             match &res {
                 Ok(rep) => {
                     s.error = None;

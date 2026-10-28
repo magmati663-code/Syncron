@@ -8,123 +8,160 @@
 </head>
 <body>
 <aside>
-  <div class="brand"><span class="logo">⇄</span> SyncPolak</div>
+  <div class="brand"><div class="logo" id="logo"></div><span>SyncPolak</span></div>
   <nav>
-    <button data-tab="jobs" class="active">Zadania</button>
-    <button data-tab="activity">Aktywność</button>
-    <button data-tab="accounts">Konta chmurowe</button>
-    <button data-tab="settings">Ustawienia</button>
+    <button data-tab="jobs" class="active"><span data-i="sync"></span><span class="l">Zadania</span></button>
+    <button data-tab="activity"><span data-i="activity"></span><span class="l">Aktywność</span><span class="badge" id="attBadge" hidden></span></button>
+    <button data-tab="accounts"><span data-i="cloud"></span><span class="l">Konta chmurowe</span></button>
+    <button data-tab="settings"><span data-i="sliders"></span><span class="l">Ustawienia</span></button>
   </nav>
   <div class="grow"></div>
-  <button id="pauseAll" class="ghost">⏸ Wstrzymaj wszystko</button>
+  <div class="side-foot">
+    <button id="pauseAll" class="ghost"><span data-i="pause"></span><span class="l" id="pauseTxt">Wstrzymaj wszystko</span></button>
+    <div class="ver">SyncPolak 0.2</div>
+  </div>
 </aside>
 
 <main>
   <section id="tab-jobs" class="tab active">
-    <header><h1>Zadania synchronizacji</h1><button id="newJob" class="primary">+ Nowe zadanie</button></header>
+    <header class="page">
+      <div><h1>Zadania synchronizacji</h1><p class="sub">Co, dokąd i kiedy ma być synchronizowane.</p></div>
+      <button id="newJob" class="primary"><span data-i="plus"></span>Nowe zadanie</button>
+    </header>
+    <div class="tiles" id="tiles"></div>
     <div id="jobs"></div>
   </section>
 
   <section id="tab-activity" class="tab">
-    <header><h1>Aktywność i historia</h1>
-      <select id="histJob"></select></header>
-    <h3>Oczekujące (plik zajęty / błędy)</h3>
+    <header class="page"><div><h1>Aktywność</h1><p class="sub">Rzeczy wymagające uwagi i historia operacji.</p></div></header>
+    <h3 style="margin-top:0">Wymaga uwagi</h3>
     <div id="pending" class="box"></div>
     <h3>Historia operacji</h3>
+    <div class="toolbar">
+      <select id="histJob"></select>
+      <input id="histQ" type="search" placeholder="Szukaj pliku lub operacji…">
+      <button id="exportCsv"><span data-i="download"></span>CSV</button>
+    </div>
     <div class="box scroll"><table id="hist"><thead><tr><th>Czas</th><th>Zadanie</th><th>Operacja</th><th>Plik</th><th>Szczegóły</th></tr></thead><tbody></tbody></table></div>
-    <button id="exportCsv" class="ghost">Eksportuj do CSV</button>
   </section>
 
   <section id="tab-accounts" class="tab">
-    <header><h1>Konta chmurowe i zdalne</h1></header>
-    <p class="muted">Dodane tutaj konta pojawią się jako lokalizacje w formie <code>nazwa:</code> (np. <code>gdrive:Dokumenty</code>).</p>
-    <div id="remotes" class="box"></div>
+    <header class="page"><div><h1>Konta chmurowe</h1><p class="sub">Po połączeniu konto pojawi się jako lokalizacja <code>nazwa:</code> (np. <code>gdrive:Dokumenty</code>).</p></div></header>
+    <div class="box" id="remotes"></div>
     <h3>Dodaj konto</h3>
-    <div class="box form">
-      <label>Typ
-        <select id="rType">
-          <option value="drive">Google Drive</option>
-          <option value="onedrive">OneDrive / SharePoint</option>
-          <option value="bitrix">Bitrix24 Dysk (WebDAV)</option>
-          <option value="webdav">WebDAV / Nextcloud</option>
-          <option value="sftp">SFTP</option>
-        </select></label>
-      <label>Nazwa konta <input id="rName" placeholder="np. gdrive"></label>
-      <div id="rFields"></div>
-      <div class="row"><button id="rAdd" class="primary">Połącz konto</button><span id="rMsg" class="muted"></span></div>
+    <div class="providers" id="providers"></div>
+    <div class="box form" id="rForm" hidden style="margin-top:14px">
+      <label>Nazwa konta (np. gdrive)<input id="rName" autocomplete="off"></label>
+      <div id="rFields" class="form"></div>
+      <div class="pick"><button id="rAdd" class="primary">Połącz konto</button><span id="rMsg" class="muted"></span></div>
     </div>
   </section>
 
   <section id="tab-settings" class="tab">
-    <header><h1>Ustawienia</h1></header>
+    <header class="page"><div><h1>Ustawienia</h1></div></header>
     <div class="box form">
-      <label class="check"><input type="checkbox" id="autostart"> Uruchamiaj SyncPolak razem z systemem (w tle)</label>
-      <p class="muted">Zamknięcie okna chowa aplikację do zasobnika systemowego — synchronizacja działa dalej. Zakończ z menu ikony.</p>
+      <div class="form" style="gap:6px"><b>Motyw</b>
+        <div class="choice" id="themeChoice">
+          <label class="opt"><input type="radio" name="theme" value="auto"><b>Automatyczny</b><span>Jak system</span></label>
+          <label class="opt"><input type="radio" name="theme" value="light"><b>Jasny</b><span>Zawsze jasny</span></label>
+          <label class="opt"><input type="radio" name="theme" value="dark"><b>Ciemny</b><span>Zawsze ciemny</span></label>
+        </div></div>
+      <label class="sw"><input type="checkbox" id="autostart"><span>Uruchamiaj razem z systemem<small>Aplikacja startuje w tle, w zasobniku systemowym.</small></span></label>
+      <p class="muted">Zamknięcie okna chowa aplikację do zasobnika — synchronizacja działa dalej. Zakończ z menu ikony w zasobniku.</p>
       <p>Silnik chmur: <code id="rcv">…</code></p>
     </div>
   </section>
 </main>
 
 <dialog id="editor">
-  <form method="dialog" id="jobForm">
-    <h2 id="edTitle">Zadanie</h2>
-    <div class="grid">
-      <label class="span2">Nazwa <input name="name" required></label>
-      <div class="loc">
-        <label>Lewa lokalizacja <input name="left" required placeholder="C:\Dane lub gdrive:Folder"></label>
-        <div class="row"><button type="button" data-pick="left">Wybierz folder…</button><select data-remote="left"><option value="">Konto chmurowe…</option></select></div>
-      </div>
-      <div class="loc">
-        <label>Prawa lokalizacja <input name="right" required placeholder="\\serwer\udział lub onedrive:"></label>
-        <div class="row"><button type="button" data-pick="right">Wybierz folder…</button><select data-remote="right"><option value="">Konto chmurowe…</option></select></div>
-      </div>
-      <label>Kierunek
-        <select name="mode">
-          <option value="TwoWay">⇄ Dwustronna</option>
-          <option value="LeftToRight">→ Lewa do prawej</option>
-          <option value="RightToLeft">← Prawa do lewej</option>
-        </select></label>
-      <label>Konflikty (zmiana po obu stronach)
-        <select name="conflict">
-          <option value="Newer">Nowszy wygrywa</option>
-          <option value="Larger">Większy wygrywa</option>
-          <option value="LeftWins">Lewa strona wygrywa</option>
-          <option value="RightWins">Prawa strona wygrywa</option>
-          <option value="KeepBoth">Zachowaj obie wersje</option>
-          <option value="Ask">Pomiń i pokaż w aktywności</option>
-        </select></label>
-      <fieldset class="span2"><legend>Usuwanie i nadpisywanie</legend>
-        <label class="check"><input type="checkbox" name="no_delete_left"> Nie usuwaj po lewej stronie</label>
-        <label class="check"><input type="checkbox" name="no_delete_right"> Nie usuwaj po prawej stronie</label>
-        <label class="check"><input type="checkbox" name="only_add"> Tylko dodawaj nowe pliki (bez nadpisywania i usuwania)</label>
-      </fieldset>
-      <label>Uwzględnij tylko (maski, jedna na linię)<textarea name="include" rows="3" placeholder="*.docx&#10;faktury/*"></textarea></label>
-      <label>Wyklucz (maski, jedna na linię)<textarea name="exclude" rows="3" placeholder="*.log&#10;node_modules/*"></textarea></label>
-      <label>Min. rozmiar (MB) <input name="min_mb" type="number" min="0" step="any"></label>
-      <label>Maks. rozmiar (MB) <input name="max_mb" type="number" min="0" step="any"></label>
-      <label>Harmonogram
-        <select name="sched">
-          <option value="Realtime">Na bieżąco (zmiany od razu)</option>
-          <option value="Interval">Co określony czas</option>
-          <option value="Daily">Codziennie o godzinie</option>
-          <option value="Manual">Tylko ręcznie</option>
-        </select></label>
-      <label id="schedVal">Wartość <input name="sched_val"></label>
-      <label>Okno czasowe: od godziny <input name="win_from" type="number" min="0" max="23" placeholder="np. 22"></label>
-      <label>do godziny <input name="win_to" type="number" min="0" max="23" placeholder="np. 6"></label>
-      <label>Kosz synchronizacji (dni, 0 = bez kosza) <input name="trash_days" type="number" min="0" value="30"></label>
-      <label>Blokada masowego usuwania (% plików) <input name="guard_pct" type="number" min="1" max="100" value="25"></label>
-      <label>Równoległe transfery <input name="threads" type="number" min="1" max="16" value="4"></label>
-      <label class="check"><input type="checkbox" name="enabled" checked> Zadanie włączone</label>
+  <form id="jobForm" autocomplete="off">
+    <div class="dh">
+      <h2 id="edTitle">Nowe zadanie</h2>
+      <div class="steps" id="steps"><span></span><span></span><span></span><span></span></div>
+      <div class="stepname" id="stepName"></div>
     </div>
-    <p id="edErr" class="err"></p>
-    <div class="row end"><button type="button" id="edCancel">Anuluj</button><button type="submit" class="primary">Zapisz</button></div>
+    <div class="db">
+      <!-- 1 -->
+      <div class="step" data-step="0">
+        <label>Nazwa zadania<input name="name" placeholder="np. Dokumenty ⇄ NAS"></label>
+        <div class="g2">
+          <div><label>Lewa lokalizacja<input name="left" placeholder="C:\Dokumenty lub gdrive:Folder"></label>
+            <div class="pick"><button type="button" class="sm" data-pick="left"><span data-i="folder"></span>Wybierz folder…</button><select data-remote="left"></select></div>
+            <div class="hint" data-hint="left"></div></div>
+          <div><label>Prawa lokalizacja<input name="right" placeholder="\\serwer\udział lub onedrive:"></label>
+            <div class="pick"><button type="button" class="sm" data-pick="right"><span data-i="folder"></span>Wybierz folder…</button><select data-remote="right"></select></div>
+            <div class="hint" data-hint="right"></div></div>
+        </div>
+        <p class="muted">Lokalizacją może być folder, dysk sieciowy (<code>\\serwer\udział</code>) albo konto chmurowe dodane w zakładce „Konta chmurowe”.</p>
+      </div>
+      <!-- 2 -->
+      <div class="step" data-step="1">
+        <div class="choice">
+          <label class="opt"><input type="radio" name="mode" value="TwoWay"><b>⇄ Dwustronna</b><span>Zmiany z obu stron trafiają na drugą</span></label>
+          <label class="opt"><input type="radio" name="mode" value="LeftToRight"><b>→ Lewa do prawej</b><span>Prawa strona jest kopią lewej</span></label>
+          <label class="opt"><input type="radio" name="mode" value="RightToLeft"><b>← Prawa do lewej</b><span>Lewa strona jest kopią prawej</span></label>
+        </div>
+        <label class="sw"><input type="checkbox" name="no_delete_left"><span>Nie usuwaj po lewej stronie<small>Usunięcie pliku po prawej nie skasuje go po lewej (w trybie dwustronnym plik wróci na prawą stronę).</small></span></label>
+        <label class="sw"><input type="checkbox" name="no_delete_right"><span>Nie usuwaj po prawej stronie<small>Usunięcie pliku po lewej nie skasuje go po prawej (w trybie dwustronnym plik wróci na lewą stronę).</small></span></label>
+        <label class="sw"><input type="checkbox" name="only_add"><span>Tylko dodawaj nowe pliki<small>Nic nie jest nadpisywane ani usuwane — idealne do archiwizacji.</small></span></label>
+        <label>Gdy plik zmieniono po obu stronach (konflikt)
+          <select name="conflict">
+            <option value="Newer">Nowszy wygrywa</option><option value="Larger">Większy wygrywa</option>
+            <option value="LeftWins">Lewa strona wygrywa</option><option value="RightWins">Prawa strona wygrywa</option>
+            <option value="KeepBoth">Zachowaj obie wersje</option><option value="Ask">Pomiń i zapytaj mnie w „Aktywności”</option>
+          </select></label>
+      </div>
+      <!-- 3 -->
+      <div class="step" data-step="2">
+        <div class="g2">
+          <label>Uwzględnij tylko (maski, jedna na linię)<textarea name="include" rows="4" placeholder="*.docx&#10;faktury/*"></textarea></label>
+          <label>Wyklucz (maski, jedna na linię)<textarea name="exclude" rows="4" placeholder="*.log&#10;*.bak"></textarea></label>
+          <label>Min. rozmiar pliku (MB)<input name="min_mb" type="number" min="0" step="any"></label>
+          <label>Maks. rozmiar pliku (MB)<input name="max_mb" type="number" min="0" step="any"></label>
+        </div>
+        <p class="muted">Maski: <code>*</code> = dowolny ciąg, <code>?</code> = jeden znak. Pliki tymczasowe (<code>~$*</code>, <code>.tmp</code>, <code>.DS_Store</code>, <code>Thumbs.db</code>) są zawsze pomijane.</p>
+      </div>
+      <!-- 4 -->
+      <div class="step" data-step="3">
+        <div class="choice c2">
+          <label class="opt"><input type="radio" name="sched" value="Realtime"><b>Na bieżąco</b><span>Zmiany łapane od razu</span></label>
+          <label class="opt"><input type="radio" name="sched" value="Interval"><b>Co jakiś czas</b><span>Co N minut</span></label>
+          <label class="opt"><input type="radio" name="sched" value="Daily"><b>Codziennie</b><span>O wybranej godzinie</span></label>
+          <label class="opt"><input type="radio" name="sched" value="Manual"><b>Ręcznie</b><span>Tylko na kliknięcie</span></label>
+        </div>
+        <label id="schedVal"><span id="schedLbl"></span><input name="sched_val"></label>
+        <div class="g2">
+          <label>Okno czasowe: od godziny<input name="win_from" type="number" min="0" max="23" placeholder="np. 22"></label>
+          <label>do godziny<input name="win_to" type="number" min="0" max="23" placeholder="np. 6"></label>
+          <label>Kosz synchronizacji (dni, 0 = bez kosza)<input name="trash_days" type="number" min="0"></label>
+          <label>Blokada masowego usuwania (% plików)<input name="guard_pct" type="number" min="1" max="100"></label>
+          <label>Równoległe transfery<input name="threads" type="number" min="1" max="16"></label>
+          <label class="sw" style="margin-top:18px"><input type="checkbox" name="enabled"><span>Zadanie włączone</span></label>
+        </div>
+        <div class="summary" id="summary"></div>
+      </div>
+      <p class="err" id="edErr"></p>
+    </div>
+    <div class="df">
+      <button type="button" id="edCancel" class="ghost">Anuluj</button>
+      <div class="pick"><button type="button" id="edBack">Wstecz</button><button type="button" id="edNext" class="primary">Dalej</button><button type="submit" id="edSave" class="primary">Zapisz</button></div>
+    </div>
   </form>
 </dialog>
 
-<dialog id="report"><h2 id="repTitle"></h2><div id="repBody" class="scroll"></div>
-  <div class="row end"><button id="repClose">Zamknij</button></div></dialog>
+<dialog id="report">
+  <div class="dh"><h2 id="repTitle"></h2></div>
+  <div class="db" id="repBody"></div>
+  <div class="df"><span></span><button id="repClose" class="primary">Zamknij</button></div>
+</dialog>
 
+<dialog id="confirm" style="width:min(440px,94vw)">
+  <div class="dh"><h2 id="cfTitle"></h2></div>
+  <div class="db" id="cfText"></div>
+  <div class="df"><button id="cfNo" class="ghost">Anuluj</button><button id="cfYes" class="primary">OK</button></div>
+</dialog>
+
+<div id="toasts"></div>
 <script src="app.js"></script>
 </body>
 </html>
