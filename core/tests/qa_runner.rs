@@ -508,7 +508,6 @@ fn r2_start_same_job_many_times_sequential_keeps_single_thread() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "BUG: równoległy start() tego samego id gubi uchwyt i zostawia osierocony wątek (wyciek, podwójne przebiegi)"]
 fn r2_concurrent_start_same_id_leaks_thread() {
     let _g = exclusive();
     let f = fx();
@@ -566,7 +565,6 @@ fn r2_missing_folder_error_then_recovers_and_watcher_is_rebuilt() {
 }
 
 #[test]
-#[ignore = "BUG: backoff ponowień jest nieskuteczny, gdy okres harmonogramu < 30 s (retry = min(okres, backoff))"]
 fn r2_error_backoff_not_shorter_than_30s() {
     let _g = shared();
     let f = fx();
@@ -589,7 +587,6 @@ fn r2_error_backoff_not_shorter_than_30s() {
 }
 
 #[test]
-#[ignore = "BUG: zadanie Manual po błędzie/zajętych plikach jest ponawiane automatycznie w nieskończoność (runner.rs:474-477)"]
 fn r2_manual_job_is_not_auto_retried_after_error() {
     let _g = shared();
     let f = fx();
@@ -638,7 +635,6 @@ fn r2_pause_blocks_background_but_not_manual_and_resume_works() {
 }
 
 #[test]
-#[ignore = "BUG: RunNow/Trigger odebrany w trakcie debouncingu jest degradowany do zwykłego przebiegu (runner.rs:517) - ręczne uruchomienie ignoruje pauzę"]
 fn r2_run_now_during_debounce_is_still_manual() {
     let _g = shared();
     let f = fx();
@@ -699,7 +695,6 @@ fn r2_run_now_force_overrides_empty_side_guard() {
 }
 
 #[test]
-#[ignore = "BUG: RunNow{force:true} odebrany w trakcie debouncingu traci flagę force (runner.rs:517) - 'Wymuś' nie działa"]
 fn r2_force_run_now_during_debounce_keeps_force() {
     let _g = shared();
     let f = fx();
@@ -770,7 +765,6 @@ fn r2_window_wrapping_midnight_contains_current_hour() {
 }
 
 #[test]
-#[ignore = "BUG: poza oknem godzin status pozostaje 'idle' bez notatki i bez next_run (runner.rs:393-396) - UI nie wyjaśnia, czemu zadanie nie działa"]
 fn r2_out_of_window_status_explains_waiting() {
     let _g = shared();
     let h = hour();
@@ -790,7 +784,6 @@ fn r2_out_of_window_status_explains_waiting() {
 }
 
 #[test]
-#[ignore = "BUG: w stanie 'paused' next_run pozostaje puste/nieaktualne (runner.rs:388-392)"]
 fn r2_paused_status_has_next_run() {
     let _g = shared();
     let f = fx();
@@ -804,7 +797,6 @@ fn r2_paused_status_has_next_run() {
 }
 
 #[test]
-#[ignore = "BUG: Daily - next_run/Instant obcinane w dół do pełnej sekundy: wybudzenie ~1 s PRZED godziną, potem drugi przebieg po 1 s (runner.rs:266)"]
 fn r2_daily_next_run_lands_exactly_on_minute() {
     let _g = shared();
     let f = fx();
@@ -922,7 +914,6 @@ fn r2_restart_while_running_never_runs_twice_in_parallel() {
 }
 
 #[test]
-#[ignore = "BUG: stary wątek kończący przebieg po restarcie nadpisuje status nowego/wyłączonego zadania (np. 'disabled' -> 'idle', runner.rs:446-479)"]
 fn r2_disable_during_run_keeps_disabled_state() {
     let _g = shared();
     let f = fx();
@@ -962,7 +953,6 @@ fn r2_disable_during_run_keeps_disabled_state() {
 }
 
 #[test]
-#[ignore = "BUG: with_job_lock/run używają lock().unwrap() - panika w jednym przebiegu zatruwa blokadę i każde kolejne użycie tego id panikuje (runner.rs:173,408)"]
 fn r2_poisoned_job_lock_does_not_break_later_use() {
     let _g = shared();
     let f = fx();
@@ -1065,7 +1055,6 @@ fn r2_trigger_drive_only_for_matching_volume() {
 }
 
 #[test]
-#[ignore = "BUG: touches_volume dopasowuje prefiks tekstowy - wolumin '/x/USB' wyzwala zadania na '/x/USB2' (runner.rs:287)"]
 fn r2_trigger_drive_prefix_collision() {
     let _g = shared();
     let f = fx();
@@ -1090,7 +1079,6 @@ fn r2_trigger_drive_prefix_collision() {
 }
 
 #[test]
-#[ignore = "BUG: wyzwalacz w kolejce przed Stop wykonuje przebieg PO zatrzymaniu zadania (sleep 3 s bez reakcji na Stop, runner.rs:503-505)"]
 fn r2_queued_trigger_does_not_run_after_stop() {
     let _g = shared();
     let f = fx();
@@ -1114,7 +1102,6 @@ fn r2_queued_trigger_does_not_run_after_stop() {
 }
 
 #[test]
-#[ignore = "BUG: relevant() szuka '.syncron'/'.syncpolak' jako podciągu CAŁEJ ścieżki - zdarzenia z folderów/plików o takich nazwach są ignorowane (runner.rs:293)"]
 fn r2_watcher_ignores_events_under_path_containing_syncron_substring() {
     let _g = shared();
     let f = fx();
@@ -1135,7 +1122,6 @@ fn r2_watcher_ignores_events_under_path_containing_syncron_substring() {
 }
 
 #[test]
-#[ignore = "BUG: j.w. - plik o nazwie zawierającej '.syncron' nie wyzwala synchronizacji w czasie rzeczywistym"]
 fn r2_watcher_ignores_file_with_syncron_substring_in_name() {
     let _g = shared();
     let f = fx();
@@ -1300,7 +1286,7 @@ fn r3_long_running_30s_stable_threads_and_status() {
     let mut i = 0usize;
     while start.elapsed() < Duration::from_secs(30) {
         fs::write(f.l.join(format!("d{}.txt", i % 25)), format!("rewizja {i}")).unwrap();
-        if i % 7 == 0 {
+        if i.is_multiple_of(7) {
             runner.run_now("q-long", false);
         }
         i += 1;
