@@ -511,16 +511,18 @@ async function loadHistory() {
   }
   renderHistory(); renderPending();
 }
+// komunikaty backendu (znany zestaw) tłumaczone dokładnym dopasowaniem; reszta danych bez zmian
+const trX = (t) => (window.i18nTr ? window.i18nTr(t) : t);
 const histName = (id) => jobs.find((j) => j.id === id)?.name || id;
 // wiersze widoczne po filtrze (używane też przez eksport CSV)
 function histRows() {
   const q = $("#histQ").value.trim().toLowerCase();
-  return lastHist.filter((h) => !q || `${h.kind} ${h.path} ${h.detail} ${histName(h.job)}`.toLowerCase().includes(q));
+  return lastHist.filter((h) => !q || `${h.kind} ${h.path} ${h.detail} ${histName(h.job)}`.toLowerCase().includes(q) || (window.i18nTr && window.i18nTr(h.kind).toLowerCase().includes(q)));
 }
 function renderHistory() {
   const rows = histRows();
   $("#hist tbody").innerHTML = histErr ? `<tr><td colspan="5" class="err" data-nt>${esc("Nie udało się wczytać historii: " + histErr)}</td></tr>`
-    : rows.map((h) => `<tr><td>${fmtTime(h.ts)}</td><td data-nt>${esc(histName(h.job))}</td><td><span class="kind ${kindClass(h.kind)}">${esc(h.kind)}</span></td><td data-nt>${esc(h.path)}</td><td class="muted" data-nt>${esc(h.detail)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">Brak wpisów.</td></tr>';
+    : rows.map((h) => `<tr><td>${fmtTime(h.ts)}</td><td data-nt>${esc(histName(h.job))}</td><td><span class="kind ${kindClass(h.kind)}">${esc(h.kind)}</span></td><td data-nt>${esc(h.path)}</td><td class="muted" data-nt>${esc(trX(h.detail))}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">Brak wpisów.</td></tr>';
   const n = $("#histNote"), full = !histErr && lastHist.length >= HIST_LIMIT;
   n.hidden = !full;
   n.textContent = full ? `Pokazano najnowsze ${HIST_LIMIT} wpisów (limit widoku) — starsze są pominięte. Eksport CSV obejmuje tylko wpisy widoczne po filtrze.` : "";
@@ -532,8 +534,8 @@ function renderPending() {
     const who = (p) => `<b data-nt>${esc(j.name)}</b><br><span data-nt>${esc(p)}</span>`;
     r.conflicts.forEach((p) => out.push(`<tr><td><span class="kind warn">konflikt</span></td><td>${who(p)}</td><td class="muted">${conflictInfo(r, p)}</td><td style="white-space:nowrap"><button class="sm" data-res="left" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj lewą</button> <button class="sm" data-res="right" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj prawą</button></td></tr>`));
     r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td>${who(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${r.vss_note ? ` · VSS: <span data-nt>${esc(r.vss_note)}</span>` : ""}${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString(LOCALE) + ")" : ""}</td></tr>`));
-    r.errors.forEach((p) => out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3">${who(p)}</td></tr>`));
-    if (st.error) out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3">${who(st.error)}</td></tr>`);
+    r.errors.forEach((p) => out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3">${who(trX(p))}</td></tr>`));
+    if (st.error) out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3">${who(trX(st.error))}</td></tr>`);
   }
   // przebudowa tylko przy zmianie treści: zachowuje fokus i trwające kliknięcia
   setHtml($("#pending"), out.length ? `<table><tbody>${out.join("")}</tbody></table>` : '<span class="muted">✓ Nic nie czeka na Twoją uwagę.</span>');

@@ -57,12 +57,16 @@ const calls = (page, cmd) => page.evaluate((c) => window.__stub.calls.filter((x)
       { ts: 1700000000, job: "job-1", kind: "kopiowanie →", path: '=HYPERLINK("http://zlosliwy.example","kliknij")', detail: 'a"b;c\nd' },
       { ts: 1700000001, job: "job-1", kind: "usunięcie", path: "zwykły.txt", detail: "" }] } });
     await page.click("nav button[data-tab=activity]"); await page.waitForTimeout(300);
+    // 1) eksport bez filtra: cytowanie pól i zabezpieczenie formuł
+    const [dl0] = await Promise.all([page.waitForEvent("download"), page.click("#exportCsv")]);
+    const csvAll = fs.readFileSync(await dl0.path(), "utf8");
+    // 2) eksport z filtrem: tylko widoczne wiersze
     await page.fill("#histQ", "zwykły"); await page.waitForTimeout(100);
     const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#exportCsv")]);
     const p = await dl.path(); const csv = fs.readFileSync(p, "utf8");
     R.check("CSV: BOM UTF-8, nagłówek i separator ';'", csv.startsWith("\uFEFFczas;zadanie;operacja;plik;szczegóły"));
-    R.check("CSV: cudzysłowy podwojone, nowa linia w polu zachowana w cudzysłowie", csv.includes('"a""b;c\nd"'));
-    R.check("CSV: nazwa pliku zaczynająca się od '=' jest zabezpieczona przed formułami arkusza (prefiks ' lub spacja)", !/(^|;)"=HYPERLINK/m.test(csv), "pole zaczyna się od =HYPERLINK(...) -> Excel/LibreOffice wykona formułę (CSV injection)");
+    R.check("CSV: cudzysłowy podwojone, nowa linia w polu zachowana w cudzysłowie", csvAll.includes('"a""b;c\nd"'));
+    R.check("CSV: nazwa pliku zaczynająca się od '=' jest zabezpieczona przed formułami arkusza (prefiks ' lub spacja)", !/(^|;)"=HYPERLINK/m.test(csvAll), "pole zaczyna się od =HYPERLINK(...) -> Excel/LibreOffice wykona formułę (CSV injection)");
     R.check("CSV: eksport respektuje aktywny filtr wyszukiwania (widoczne 1 wiersz)", csv.trim().split("\r\n").length <= 2, `wierszy w CSV: ${csv.trim().split("\r\n").length - 1} przy 1 widocznym po filtrze`);
     await browser.close();
   }

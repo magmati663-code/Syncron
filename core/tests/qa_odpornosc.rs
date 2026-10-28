@@ -497,21 +497,13 @@ fn r2_partial_failure_records_only_successes_and_heals() {
     fs::write(r.join("c.txt/x"), "x").unwrap();
     let mut j = job(&l, &r, "LeftToRight");
     j.guard_pct = 100;
+    // lustro jednostronne: zbędny plik w katalogu stojącym na drodze jest usuwany, katalog znika
+    // (puste katalogi po usunięciu są sprzątane), więc kopia c.txt udaje się już w tym przebiegu
     let rep = run(&j, &s);
-    assert_eq!(rep.copied, 3, "{rep:?}");
-    assert_eq!(rep.errors.len(), 1, "{rep:?}");
-    let c = open_db(&s).unwrap();
-    let n: i64 = c
-        .query_row("SELECT COUNT(*) FROM base WHERE key='c.txt'", [], |x| {
-            x.get(0)
-        })
-        .unwrap();
-    assert_eq!(n, 0, "nieudany plik nie może trafić do bazy");
-    // uzdrowienie
-    fs::remove_dir_all(r.join("c.txt")).unwrap();
-    let rep = run(&j, &s);
+    assert_eq!(rep.copied, 4, "{rep:?}");
     assert!(rep.errors.is_empty(), "{rep:?}");
     assert_eq!(fs::read(r.join("c.txt")).unwrap(), b"c");
+    assert!(run(&j, &s).planned.is_empty());
 }
 
 #[test]

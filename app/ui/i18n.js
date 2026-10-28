@@ -118,6 +118,22 @@
     ") są zawsze pomijane. Wykluczenia możesz też zapisać w pliku": ") are always skipped. You can also keep exclusions in the file",
     "w głównym folderze (jedna maska na linię,": "in the root folder (one mask per line,", "pomija cały folder) — wędruje razem z danymi.": "skips the whole folder) — it travels with the data.",
     "Brak dostępu do folderu": "No access to the folder", "odmowa dostępu": "access denied", "wymaga decyzji": "needs decision",
+    "Nie udało się wczytać zadań": "Could not load jobs", "Spróbuj ponownie": "Try again",
+    "Nie udało się odczytać listy zadań.": "Could not read the job list.", "Brak odpowiedzi silnika": "Engine not responding",
+    "błąd połączenia": "connection error", "Nie uruchomiono: zadanie jest wyłączone lub właśnie się wykonuje.": "Not started: the job is disabled or already running.",
+    "Nie udało się odczytać historii.": "Could not read the history.", "Nie udało się odczytać listy kont.": "Could not read the account list.",
+    "Nadpisać istniejące konto?": "Overwrite existing account?", "Nadpisz": "Overwrite", "błąd odczytu": "read error",
+    "Podaj liczbę całkowitą minut (0 lub więcej); 0 wyłącza powiadomienie.": "Enter a whole number of minutes (0 or more); 0 turns the notification off.",
+    "Operacja nie powiodła się — sprawdź wprowadzone wartości.": "The operation failed — check the entered values.",
+    "Nie udało się zapisać zadania: dane w formularzu są niepoprawne. Sprawdź wartości liczbowe w krokach 3–5.": "Could not save the job: the form data is invalid. Check the numeric values in steps 3–5.",
+    "bez limitu": "no limit",
+    "Uwaga: jedna lokalizacja leży wewnątrz drugiej. Synchronizacja kopiowałaby folder sam do siebie — wybierz foldery, które się nie zawierają.": "Warning: one location is inside the other. Sync would copy the folder into itself — choose folders that do not contain each other.",
+    "Podaj obie lokalizacje.": "Enter both locations.", "Lewa i prawa lokalizacja nie mogą być takie same.": "The left and right locations cannot be the same.",
+    "Podaj godzinę w formacie GG:MM (godzina 0–23, minuty 00–59), np. 02:30.": "Enter a time as HH:MM (hours 0–23, minutes 00–59), e.g. 02:30.",
+    "Okno czasowe: podaj obie godziny (od i do) albo zostaw oba pola puste.": "Time window: enter both hours (from and to) or leave both empty.",
+    "Godziny limitu: podaj obie (od i do) albo zostaw oba pola puste.": "Limit hours: enter both (from and to) or leave both empty.",
+    "Min. rozmiar pliku nie może być większy niż maksymalny.": "Min. file size cannot be larger than the maximum.",
+    "plik zajęty": "file in use", "Brak dostępu do folderu": "No access to the folder",
     "Zapisano": "Saved", "jeszcze nie": "not yet", "przed chwilą": "just now", "Jeszcze nie uruchomione": "Not run yet",
   };
 
@@ -151,12 +167,20 @@
     [/^Zadanie startuje tylko przy zasilaniu sieciowym\.$/, "The job starts only on AC power."],
     [/^Zadanie startuje tylko w sieciach Wi-Fi: (.+)\.$/, "The job starts only on Wi-Fi networks: $1.", true],
     [/^Dodatkowo uruchamia się: (.+)\.$/, "Also runs: $1."],
+    [/^(.+): odmowa dostępu$/s, "$1: access denied", true],
     [/^Synchronizuję \((\d+)\)$/, "Syncing ($1)"],
     [/^\\\\serwer\\udział lub onedrive:$/, "\\\\server\\share or onedrive:", true],
     [/^Limit prędkości: (.+?) KB\/s w godzinach (.+), poza nimi (.+?) KB\/s\.$/, (a, h, b) => `Speed limit: ${a === "bez limitu" ? "unlimited" : a + " KB/s"} between ${h}, outside those hours: ${b === "bez limitu" ? "unlimited" : b + " KB/s"}.`, true],
     [/^Limit prędkości: (.+?) KB\/s\.$/, "Speed limit: $1 KB/s.", true],
     [/^limit (.+?) KB\/s$/, "limit $1 KB/s", true],
     [/^\\\\serwer\\udział$/, "\\\\server\\share", true],
+    [/^(Nie udało się wczytać zadań|Nie udało się zmienić stanu wstrzymania|Nie udało się wczytać historii|Nie udało się wczytać kont): (.*)$/s, (m, a, b) => ({ "Nie udało się wczytać zadań": "Could not load jobs", "Nie udało się zmienić stanu wstrzymania": "Could not change the pause state", "Nie udało się wczytać historii": "Could not load history", "Nie udało się wczytać kont": "Could not load accounts" })[a] + ": " + b, true],
+    [/^Brak odpowiedzi silnika synchronizacji — widoczny stan może być nieaktualny: (.*)$/s, "The sync engine is not responding — the displayed status may be outdated: $1", true],
+    [/^Nie udało się wczytać ustawień — widoczne wartości są domyślne i nie zostaną zapisane: (.*)$/s, "Could not load settings — the values shown are defaults and will not be saved: $1", true],
+    [/^Pokazano najnowsze (\d+) wpisów \(limit widoku\) — starsze są pominięte\. Eksport CSV obejmuje tylko wpisy widoczne po filtrze\.$/, "Showing the latest $1 entries (view limit) — older ones are omitted. The CSV export covers only the entries visible after filtering."],
+    [/^Konto „(.+)” już istnieje\. Dodanie konta pod tą samą nazwą nadpisze jego konfigurację\. Aby tego uniknąć, zmień nazwę\.$/, "Account “$1” already exists. Adding an account with the same name will overwrite its configuration. Change the name to avoid this.", true],
+    [/^(.+): podaj liczbę całkowitą od (\S+) do (\S+)\.$/, (m, l, a, b) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size"}[l] || l) + ": enter a whole number from " + a + " to " + b + ".", true],
+    [/^(.+): podaj liczbę MB od 0 do ([\d\s\u00a0]+) \(puste lub 0 = bez limitu\)\.$/, (m, l, n) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size"}[l] || l) + ": enter a size in MB from 0 to " + n.replace(/[\s\u00a0]+/g, ",") + " (empty or 0 = no limit).", true],
   ];
 
   // Frazy do podmiany wewnątrz dłuższych tekstów (składanych w kodzie z wielu części).
@@ -166,6 +190,7 @@
     [/Ostatnio/g, "Last run"], [/min temu/g, "min ago"], [/godz\. temu/g, "h ago"], [/przed chwilą/g, "just now"], [/skopiowano/g, "copied"], [/usunięto/g, "deleted"], [/przeniesiono/g, "moved"],
     [/następne/g, "next"], [/Jeszcze nie uruchomione/g, "Not run yet"], [/konflikty (\d+)/g, "conflicts $1"],
     [/Zatrzymano ze względów bezpieczeństwa:/g, "Stopped for safety reasons:"],
+    [/plan usuwa ponad (\d+)% plików/g, "the plan deletes more than $1% of files"],
     [/Sprawdź „Symulację”; „Wymuś” pominie blokadę\./g, "Check “Simulate”; “Force” skips the guard."],
     [/jedna ze stron jest pusta, choć wcześniej były tam pliki \(odpięty dysk\?\)/g, "one side is empty although it held files before (unplugged drive?)"],
     [/plan usuwa ponad (\d+)% plików/g, "the plan deletes more than $1% of files"],
@@ -239,6 +264,7 @@
     if (root.matches && root.matches("[placeholder],[title]")) fixAttrs(root);
     if (root.querySelectorAll) for (const el of root.querySelectorAll("[placeholder],[title]")) fixAttrs(el);
   };
+  window.i18nTr = (str) => tr(String(str), false);   // dla wyszukiwarki: dopasowanie do widocznego (przetłumaczonego) tekstu
   const start = () => {
     walk(document.body);
     const obs = new MutationObserver((ms) => {

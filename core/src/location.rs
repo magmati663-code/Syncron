@@ -1260,7 +1260,7 @@ fn list_rclone(base: &str) -> Result<Scan, String> {
                 .into_iter()
                 // wiodący '/' (np. "/abs/x") traktujemy jak ścieżkę względną korzenia
                 .map(|(p, m)| (p.strip_prefix('/').map(str::to_string).unwrap_or(p), m))
-                .filter(|(p, _)| match names::check_rel(p) {
+                .filter(|(p, _)| match check_local_rel(p) {
                     Ok(()) => true,
                     Err(e) => {
                         skipped.push(format!(

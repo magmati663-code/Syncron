@@ -13,6 +13,8 @@ async function fillBasics(page, o = {}) {
   await page.fill('[name=left]', o.left ?? "C:\\A");
   await page.fill('[name=right]', o.right ?? "D:\\B");
 }
+// Zapisz jest widoczny dopiero w kroku 5; gdy walidacja zatrzymała kreator wcześniej, błąd jest w #edErr
+async function clickSave(page) { if (await page.locator("#edSave").isVisible()) await page.click("#edSave"); }
 async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#edNext"); }
 
 (async () => {
@@ -51,7 +53,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     await page.click("#edNext");
     const sum = await page.innerHTML("#summary");
     R.check("podsumowanie (krok 5) nie wstawia HTML ze ścieżek/Wi-Fi", !/<img/i.test(sum) && !/<script/i.test(sum));
-    await page.click("#edSave"); await page.waitForTimeout(400);
+    await clickSave(page); await page.waitForTimeout(400);
     R.check("XSS nie wykonany po zapisie i renderze karty", (await page.evaluate(() => window.__xss || 0)) === 0 && await page.locator(".card img").count() === 0);
     const c = saves(await page.evaluate(() => window.__stub.calls));
     R.check("nazwa z HTML zapisana literalnie", c.length === 1 && c[0].args.job.name === evil);
@@ -83,7 +85,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     await page.click("#edNext");
     const err4 = await page.textContent("#edErr");
     if (await page.locator('.step.on[data-step="4"]').count() === 0) { R.check(`sched ${t} "${v}" (${desc}): zatrzymane walidacją`, true, err4); await browser.close(); continue; }
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    await clickSave(page); await page.waitForTimeout(300);
     const err = await page.textContent("#edErr");
     const c = saves(await page.evaluate(() => window.__stub.calls));
     const s = c[0]?.args.job.schedule;
@@ -104,7 +106,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     await toStep(page, step);
     await page.fill(`[name=${name}]`, val);
     await toStep(page, 4 - step);
-    await page.click("#edSave"); await page.waitForTimeout(400);
+    await clickSave(page); await page.waitForTimeout(400);
     const c = saves(await page.evaluate(() => window.__stub.calls));
     const err = await page.textContent("#edErr");
     const open = await page.locator("#editor[open]").count();
@@ -117,7 +119,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     const { browser, page } = await fresh();
     await page.click("#newJob"); await fillBasics(page);
     await toStep(page, 2); await page.fill('[name=max_mb]', "0"); await toStep(page, 2);
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    await clickSave(page); await page.waitForTimeout(300);
     const j = saves(await page.evaluate(() => window.__stub.calls))[0]?.args.job;
     R.check('"Maks. rozmiar = 0" nie tworzy zadania wykluczającego wszystkie pliki (max_size=0 => Rust wyklucza size>=1)', j && (j.max_size === null), `wysłano max_size=${j && j.max_size}`);
     await browser.close();
@@ -126,7 +128,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     const { browser, page } = await fresh();
     await page.click("#newJob"); await fillBasics(page);
     await toStep(page, 2); await page.fill('[name=max_mb]', "1e30"); await toStep(page, 2);
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    await clickSave(page); await page.waitForTimeout(300);
     const err = await page.textContent("#edErr");
     R.check('"Maks. rozmiar = 1e30 MB" daje zrozumiały komunikat / jest ograniczone (zamiast surowego błędu serde)', !/invalid|expected u64/i.test(err), `#edErr="${err}"`);
     await browser.close();
@@ -137,9 +139,11 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     const { browser, page } = await fresh();
     await page.click("#newJob"); await fillBasics(page);
     await toStep(page, 3); await page.fill('[name=win_from]', "22"); await toStep(page, 1);
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    // walidacja blokuje przejście dalej z komunikatem (Zapisz jest wtedy niewidoczny) albo zapis z komunikatem
+    if (await page.locator("#edSave").isVisible()) { await clickSave(page); await page.waitForTimeout(300); }
     const j = saves(await page.evaluate(() => window.__stub.calls))[0]?.args.job;
-    R.check("okno czasowe z samym 'od' (bez 'do') -> komunikat zamiast cichego odrzucenia", !(j && j.window === null), `wysłano window=${JSON.stringify(j && j.window)} bez ostrzeżenia`);
+    const msg = await page.textContent("#edErr");
+    R.check("okno czasowe z samym 'od' (bez 'do') -> komunikat zamiast cichego odrzucenia", !(j && j.window === null) && (j || msg.length > 0), `wysłano window=${JSON.stringify(j && j.window)} komunikat="${msg}"`);
     await browser.close();
   }
 
@@ -177,7 +181,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
   for (const [name, extra, test] of rt) {
     const { browser, page, errors } = await fresh({ jobs: [mkJob(1, extra)] });
     await page.click('.card [data-act=edit]'); await toStep(page, 4);
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    await clickSave(page); await page.waitForTimeout(300);
     const c = saves(await page.evaluate(() => window.__stub.calls));
     const j = c[0]?.args.job;
     const err = await page.textContent("#edErr");
@@ -190,7 +194,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     const old = mkJob(1); delete old.bandwidth; delete old.conditions; delete old.triggers; delete old.window; delete old.min_size; delete old.max_size; delete old.verify; delete old.max_versions; delete old.use_vss;
     const { browser, page, errors } = await fresh({ jobs: [old] });
     await page.click('.card [data-act=edit]'); await toStep(page, 4);
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    await clickSave(page); await page.waitForTimeout(300);
     const j = saves(await page.evaluate(() => window.__stub.calls))[0]?.args.job;
     R.check("stary schemat (brak bandwidth/conditions/triggers/...) edytowalny i zapisywalny", !!j && errors.length === 0, errors.join("|"));
     await browser.close();
@@ -201,7 +205,7 @@ async function toStep(page, n) { for (let i = 0; i < n; i++) await page.click("#
     const { browser, page } = await fresh();
     await page.click("#newJob"); await fillBasics(page); await toStep(page, 4);
     await page.fill('[name=threads]', "-3"); await page.fill('[name=guard_pct]', "250"); await page.fill('[name=bw_kbps]', "-1");
-    await page.click("#edSave"); await page.waitForTimeout(300);
+    await clickSave(page); await page.waitForTimeout(300);
     const c = saves(await page.evaluate(() => window.__stub.calls));
     R.check("wartości poza zakresem w kroku 5 nie trafiają do backendu", c.length === 0, `save_job wywołań: ${c.length}`);
     await browser.close();
