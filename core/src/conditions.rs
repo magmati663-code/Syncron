@@ -4,18 +4,46 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Limit czasu polecenia pomocniczego (po nim proces jest zabijany).
+const CMD_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::Stdio;
     let mut c = Command::new(cmd);
-    c.args(args);
+    c.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000);
     }
-    let o = c.output().ok()?;
-    o.status
-        .success()
-        .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+    let mut child = c.spawn().ok()?;
+    let mut out = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        buf
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) if start.elapsed() < CMD_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let buf = reader.join().unwrap_or_default();
+    let ok = status?.success();
+    ok.then(|| String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// `Some(true)` = zasilanie sieciowe, `Some(false)` = bateria, `None` = nie wiadomo.
@@ -103,14 +131,16 @@ type Cache = Option<(Instant, Option<bool>, Option<String>)>;
 static CACHE: Mutex<Cache> = Mutex::new(None);
 
 fn probe() -> (Option<bool>, Option<String>) {
-    let mut c = CACHE.lock().unwrap();
-    if let Some((t, ac, ssid)) = c.as_ref() {
-        if t.elapsed() < Duration::from_secs(15) {
-            return (*ac, ssid.clone());
-        }
+    let cached = |c: &Cache| match c {
+        Some((t, ac, ssid)) if t.elapsed() < Duration::from_secs(15) => Some((*ac, ssid.clone())),
+        _ => None,
+    };
+    if let Some(r) = cached(&CACHE.lock().unwrap_or_else(|e| e.into_inner())) {
+        return r;
     }
+    // polecenia uruchamiamy poza blokadą cache (mogą chwilę trwać)
     let (ac, ssid) = (on_ac_power(), wifi_ssid());
-    *c = Some((Instant::now(), ac, ssid.clone()));
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), ac, ssid.clone()));
     (ac, ssid)
 }
 

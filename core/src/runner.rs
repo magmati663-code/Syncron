@@ -1,17 +1,18 @@
 //! Uruchamianie zadań: watcher zdarzeń z debouncingiem, polling, interwały, harmonogram dzienny, okna czasowe, ponowienia.
 use crate::conditions;
 use crate::engine::{run_job_with, Report};
-use crate::location::{Location, TRASH_DIR};
+use crate::location::{Location, LEGACY_TRASH_DIR, TRASH_DIR};
 use crate::model::{Job, Schedule};
 use crate::names;
 use chrono::{Local, Timelike};
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ enum Msg {
         force: bool,
     },
     FsEvent,
+    /// Wznowienie po pauzie: budzi wątek, by nie czekał do końca 10-sekundowego odpytywania.
+    Resume,
     Stop,
 }
 
@@ -50,6 +53,8 @@ pub struct Status {
 
 struct Handle {
     tx: Sender<Msg>,
+    /// Numer generacji wątku: tylko wątek o aktualnym numerze może zapisywać status i wykonywać przebiegi.
+    epoch: u64,
 }
 
 #[derive(Default)]
@@ -58,14 +63,20 @@ struct Inner {
     status: Mutex<HashMap<String, Status>>,
     locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     paused: AtomicBool,
+    next_epoch: AtomicU64,
+    /// Flaga zatrzymania aktualnego monitora systemowego (None: monitor nie działa).
+    monitor: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+/// Blokada odporna na zatrucie (panika w innym wątku nie może psuć kolejnych użyć).
+fn lock_ok<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Inner {
     /// Blokada zadania: nigdy dwa przebiegi tego samego zadania naraz (np. po edycji w trakcie synchronizacji).
     fn lock_for(&self, id: &str) -> Arc<Mutex<()>> {
-        self.locks
-            .lock()
-            .unwrap()
+        lock_ok(&self.locks)
             .entry(id.to_string())
             .or_default()
             .clone()
@@ -313,13 +324,22 @@ impl Runner {
         }
     }
 
-    /// (Re)startuje wątek zadania.
+    /// (Re)startuje wątek zadania. Cały start (stop starego, uruchomienie, rejestracja) odbywa się
+    /// pod jedną blokadą `handles`, więc równoległe `start()` tego samego id nie gubią uchwytów.
     pub fn start(&self, job: Job) {
-        self.stop(&job.id);
+        let mut handles = lock_ok(&self.inner.handles);
+        if let Some(old) = handles.remove(&job.id) {
+            let _ = old.tx.send(Msg::Stop);
+        }
         if !job.enabled {
-            self.set(&job.id, |s| s.state = "disabled".into());
+            set_status(&self.inner, &job.id, |s| {
+                s.state = "disabled".into();
+                s.progress = None;
+                s.next_run = None;
+            });
             return;
         }
+        let epoch = self.inner.next_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let (tx, rx) = channel();
         let (inner, dir, tx2, id) = (
             self.inner.clone(),
@@ -327,23 +347,50 @@ impl Runner {
             tx.clone(),
             job.id.clone(),
         );
-        self.set(&id, |s| s.state = "idle".into());
+        set_status(&self.inner, &id, |s| {
+            s.state = "idle".into();
+            s.progress = None;
+        });
         let _ = thread::Builder::new()
             .name(format!("job-{id}"))
-            .spawn(move || job_loop(job, rx, tx2, inner, dir))
+            .spawn(move || job_loop(job, rx, tx2, inner, dir, epoch))
             .ok();
-        self.inner.handles.lock().unwrap().insert(id, Handle { tx });
+        if let Some(prev) = handles.insert(id, Handle { tx, epoch }) {
+            let _ = prev.tx.send(Msg::Stop);
+        }
     }
 
     pub fn stop(&self, id: &str) {
         // wątek kończy się po bieżącym przebiegu; nie blokujemy interfejsu czekaniem na niego
-        if let Some(h) = self.inner.handles.lock().unwrap().remove(id) {
+        let mut handles = lock_ok(&self.inner.handles);
+        if let Some(h) = handles.remove(id) {
             let _ = h.tx.send(Msg::Stop);
+            // stary wątek nie może już zapisywać statusu: nie zostawiamy "running" na zawsze
+            set_status(&self.inner, id, |s| {
+                if s.state == "running" {
+                    s.state = "idle".into();
+                }
+                s.progress = None;
+            });
+        }
+    }
+
+    /// Zatrzymuje zadanie i usuwa jego wpisy stanu (status, blokada) - np. po usunięciu zadania.
+    pub fn forget(&self, id: &str) {
+        self.stop(id);
+        let handles = lock_ok(&self.inner.handles);
+        if !handles.contains_key(id) {
+            lock_ok(&self.inner.status).remove(id);
+            let mut locks = lock_ok(&self.inner.locks);
+            // blokadę trzymaną przez trwający przebieg zostawiamy (usunięcie pozwoliłoby na przebieg równoległy)
+            if locks.get(id).is_some_and(|l| Arc::strong_count(l) == 1) {
+                locks.remove(id);
+            }
         }
     }
 
     pub fn stop_all(&self) {
-        let ids: Vec<String> = self.inner.handles.lock().unwrap().keys().cloned().collect();
+        let ids: Vec<String> = lock_ok(&self.inner.handles).keys().cloned().collect();
         for id in ids {
             self.stop(&id);
         }
@@ -351,14 +398,19 @@ impl Runner {
 
     /// Uruchomienie ręczne; `force` pomija zabezpieczenia (potwierdzone przez użytkownika).
     pub fn run_now(&self, id: &str, force: bool) -> bool {
-        match self.inner.handles.lock().unwrap().get(id) {
+        match lock_ok(&self.inner.handles).get(id) {
             Some(h) => h.tx.send(Msg::RunNow { force }).is_ok(),
             None => false,
         }
     }
 
     pub fn set_paused(&self, p: bool) {
-        self.inner.paused.store(p, Ordering::SeqCst);
+        let was = self.inner.paused.swap(p, Ordering::SeqCst);
+        if was && !p {
+            for h in lock_ok(&self.inner.handles).values() {
+                let _ = h.tx.send(Msg::Resume);
+            }
+        }
     }
 
     pub fn is_paused(&self) -> bool {
@@ -366,19 +418,19 @@ impl Runner {
     }
 
     pub fn status(&self) -> HashMap<String, Status> {
-        self.inner.status.lock().unwrap().clone()
+        lock_ok(&self.inner.status).clone()
     }
 
     /// Wykonuje `f` z blokadą zadania (np. ręczne rozstrzygnięcie konfliktu).
     pub fn with_job_lock<T>(&self, id: &str, f: impl FnOnce() -> T) -> T {
         let l = self.inner.lock_for(id);
-        let _g = l.lock().unwrap();
+        let _g = lock_ok(&l);
         f()
     }
 
     /// Rozsyła zdarzenie systemowe do wszystkich zadań (każde samo sprawdza, czy je interesuje).
     pub fn trigger(&self, kind: &str, vol: Option<&str>) {
-        for h in self.inner.handles.lock().unwrap().values() {
+        for h in lock_ok(&self.inner.handles).values() {
             let _ = h.tx.send(Msg::Trigger {
                 kind: kind.into(),
                 vol: vol.map(String::from),
@@ -387,16 +439,29 @@ impl Runner {
     }
 
     /// Uruchamia wątek wykrywający: podłączenie dysku, wybudzenie z uśpienia i zmianę sieci.
+    /// Wywołanie, gdy monitor już działa, nic nie robi.
     pub fn start_monitor(&self) {
+        let mut slot = lock_ok(&self.inner.monitor);
+        if slot.is_some() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        *slot = Some(stop.clone());
         let me = self.clone();
-        let _ = thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name("system-monitor".into())
             .spawn(move || {
                 let mut vols = mounted_volumes();
                 let mut ip = local_ip();
                 let mut last = std::time::SystemTime::now();
                 loop {
-                    thread::sleep(Duration::from_secs(5));
+                    // 5 s w krótkich odcinkach, by zatrzymanie było szybkie
+                    for _ in 0..20 {
+                        if stop.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(250));
+                    }
                     let now = std::time::SystemTime::now();
                     if now
                         .duration_since(last)
@@ -421,28 +486,53 @@ impl Runner {
                     ip = i;
                 }
             });
+        if spawned.is_err() {
+            *slot = None;
+        }
+    }
+
+    /// Zatrzymuje monitor systemowy (jeśli działa); można go potem uruchomić ponownie.
+    pub fn stop_monitor(&self) {
+        if let Some(f) = lock_ok(&self.inner.monitor).take() {
+            f.store(true, Ordering::SeqCst);
+        }
     }
 
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
     }
-
-    fn set(&self, id: &str, f: impl FnOnce(&mut Status)) {
-        set_status(&self.inner, id, f);
-    }
 }
 
 fn set_status(inner: &Inner, id: &str, f: impl FnOnce(&mut Status)) {
-    let mut m = inner.status.lock().unwrap();
+    let mut m = lock_ok(&inner.status);
     f(m.entry(id.to_string()).or_default());
 }
 
+/// Czy wątek o numerze `epoch` jest nadal aktualnym wątkiem zadania.
+fn is_current(inner: &Inner, id: &str, epoch: u64) -> bool {
+    lock_ok(&inner.handles)
+        .get(id)
+        .is_some_and(|h| h.epoch == epoch)
+}
+
+/// Zapis statusu tylko przez aktualny wątek (przestarzały wątek nie nadpisuje stanu nowego/wyłączonego).
+/// Kolejność blokad (handles, potem status) jest taka sama jak w `start`/`stop`.
+fn set_status_ep(inner: &Inner, id: &str, epoch: u64, f: impl FnOnce(&mut Status)) {
+    let handles = lock_ok(&inner.handles);
+    if handles.get(id).is_some_and(|h| h.epoch == epoch) {
+        set_status(inner, id, f);
+    }
+}
+
+/// Okno godzin [a, b): przy a > b obejmuje północ. Okno [a, a] (puste) traktujemy jako „zawsze”
+/// (a nie „nigdy”), by błędna konfiguracja nie wyłączała zadania po cichu.
 fn in_window(w: Option<[u32; 2]>) -> bool {
     match w {
         None => true,
+        Some([a, b]) if a == b => true,
         Some([a, b]) => {
             let h = Local::now().hour();
-            if a <= b {
+            if a < b {
                 h >= a && h < b
             } else {
                 h >= a || h < b
@@ -451,21 +541,37 @@ fn in_window(w: Option<[u32; 2]>) -> bool {
     }
 }
 
+/// Pierwszy poprawny czas lokalny nie wcześniejszy niż `t` (w luce DST przesuwa za lukę).
+fn resolve_local(mut t: chrono::NaiveDateTime) -> Option<chrono::DateTime<Local>> {
+    for _ in 0..=180 {
+        if let Some(x) = t.and_local_timezone(Local).earliest() {
+            return Some(x);
+        }
+        t += chrono::Duration::minutes(1);
+    }
+    None
+}
+
+/// Liczba sekund do najbliższej (przyszłej) godziny:minuty czasu lokalnego, liczona tak, że
+/// `ts_teraz + wynik` wypada dokładnie na pełną minutę (nigdy przed terminem).
 fn secs_until_daily(hour: u32, minute: u32) -> u64 {
+    if hour >= 24 || minute >= 60 {
+        log::warn!(
+            "godzina {hour}:{minute} poza zakresem - użyto {}:{}",
+            hour % 24,
+            minute % 60
+        );
+    }
     let now = Local::now();
-    let mut t = now
+    let t = now
         .date_naive()
         .and_hms_opt(hour % 24, minute % 60, 0)
         .unwrap();
-    if t.and_local_timezone(Local)
-        .earliest()
-        .is_none_or(|x| x <= now)
-    {
-        t += chrono::Duration::days(1);
+    let mut target = resolve_local(t);
+    if target.is_none_or(|x| x <= now) {
+        target = resolve_local(t + chrono::Duration::days(1));
     }
-    t.and_local_timezone(Local)
-        .earliest()
-        .map_or(3600, |x| (x - now).num_seconds().max(1) as u64)
+    target.map_or(3600, |x| (x.timestamp() - now.timestamp()).max(1) as u64)
 }
 
 fn period(s: &Schedule) -> Option<Duration> {
@@ -479,20 +585,39 @@ fn period(s: &Schedule) -> Option<Duration> {
     }
 }
 
+/// Rozbija ścieżkę na znormalizowane komponenty (bez rozróżniania wielkości liter i rodzaju separatora).
+fn norm_components(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .split(['/', '\\'])
+        .filter(|c| !c.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 /// Czy któraś z lokalizacji lokalnych zadania leży na podanym woluminie (litera dysku / punkt montowania).
+/// Porównanie komponentami: „/x/USB” nie obejmuje „/x/USB2”.
 fn touches_volume(job: &Job, vol: &str) -> bool {
-    let v = vol.to_lowercase().replace('/', "\\");
+    let v = norm_components(vol);
+    if v.is_empty() {
+        return false;
+    }
     [&job.left, &job.right].iter().any(|s| {
-        matches!(Location::parse(s), Location::Local(_))
-            && s.to_lowercase()
-                .replace('/', "\\")
-                .starts_with(v.trim_end_matches('\\'))
+        matches!(Location::parse(s), Location::Local(_)) && norm_components(s).starts_with(&v)
     })
 }
 
-fn relevant(p: &Path) -> bool {
-    let s = p.to_string_lossy();
-    if s.contains(TRASH_DIR) || s.contains(".syncron") || s.contains(".syncpolak") {
+/// Czy zdarzenie dla ścieżki `p` powinno wyzwolić synchronizację. Kosz i pliki tymczasowe ocenia się
+/// po komponentach ścieżki względem korzenia zadania (nie po podciągach ścieżki bezwzględnej).
+fn relevant(p: &Path, roots: &[PathBuf]) -> bool {
+    let rel = roots
+        .iter()
+        .find_map(|r| p.strip_prefix(r).ok())
+        .unwrap_or(p);
+    let in_trash = rel.components().any(|c| {
+        let c = c.as_os_str().to_string_lossy();
+        c == TRASH_DIR || c == LEGACY_TRASH_DIR
+    });
+    if in_trash {
         return false;
     }
     !p.file_name()
@@ -504,9 +629,18 @@ fn make_watcher(job: &Job, tx: Sender<Msg>) -> Option<notify::RecommendedWatcher
     if !matches!(job.schedule, Schedule::Realtime { .. }) {
         return None;
     }
+    let roots: Vec<PathBuf> = [&job.left, &job.right]
+        .into_iter()
+        .filter_map(|s| match Location::parse(s) {
+            Location::Local(p) => Some(p),
+            _ => None,
+        })
+        .collect();
     let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = res {
-            if !matches!(ev.kind, EventKind::Access(_)) && ev.paths.iter().any(|p| relevant(p)) {
+            if !matches!(ev.kind, EventKind::Access(_))
+                && ev.paths.iter().any(|p| relevant(p, &roots))
+            {
                 let _ = tx.send(Msg::FsEvent);
             }
         }
@@ -560,61 +694,90 @@ fn ts_in(d: Duration) -> i64 {
     Local::now().timestamp() + d.as_secs() as i64
 }
 
-fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir: PathBuf) {
+fn job_loop(
+    job: Job,
+    rx: Receiver<Msg>,
+    tx: Sender<Msg>,
+    inner: Arc<Inner>,
+    dir: PathBuf,
+    epoch: u64,
+) {
+    let current = || is_current(&inner, &job.id, epoch);
+    let set = |f: &mut dyn FnMut(&mut Status)| set_status_ep(&inner, &job.id, epoch, f);
     let mut watcher = make_watcher(&job, tx.clone());
     // po awarii/odłączeniu folderu uchwyt watchera przestaje działać: odtwarzamy go po powrocie do zdrowia
     let mut stale = false;
-    let refresh =
-        |watcher: &mut Option<notify::RecommendedWatcher>, stale: &mut bool, inner: &Inner| {
-            let state = inner
-                .status
-                .lock()
-                .unwrap()
-                .get(&job.id)
-                .map(|s| s.state.clone())
-                .unwrap_or_default();
-            if state == "error" || state == "waiting" {
-                *stale = true;
-            } else if *stale {
-                *watcher = make_watcher(&job, tx.clone());
-                *stale = false;
-            }
-        };
+    let refresh = |watcher: &mut Option<notify::RecommendedWatcher>, stale: &mut bool| {
+        let state = lock_ok(&inner.status)
+            .get(&job.id)
+            .map(|s| s.state.clone())
+            .unwrap_or_default();
+        if state == "error" || state == "waiting" {
+            *stale = true;
+        } else if *stale {
+            *watcher = make_watcher(&job, tx.clone());
+            *stale = false;
+        }
+    };
+    let manual_only = job.schedule == Schedule::Manual;
     let mut backoff = 0u32;
     // skan startowy (nadrobienie zmian z czasu, gdy aplikacja była wyłączona)
-    let mut next: Option<Instant> = (job.schedule != Schedule::Manual).then(Instant::now);
+    let mut next: Option<Instant> = (!manual_only).then(Instant::now);
 
     // wykonuje przebieg i wyznacza następny termin
     let mut run = |force: bool, manual: bool, next: &mut Option<Instant>| {
+        if !current() {
+            return;
+        }
         if !manual {
             if inner.paused.load(Ordering::SeqCst) {
-                set_status(&inner, &job.id, |s| s.state = "paused".into());
+                set(&mut |s| {
+                    s.state = "paused".into();
+                    s.next_run = Some(ts_in(Duration::from_secs(10)));
+                });
                 *next = Some(Instant::now() + Duration::from_secs(10));
                 return;
             }
             if !in_window(job.window) {
-                *next = Some(Instant::now() + Duration::from_secs(300));
+                // czekamy do początku okna (nie dłużej niż godzinę naraz)
+                let until = job
+                    .window
+                    .map(|[a, _]| secs_until_daily(a, 0))
+                    .unwrap_or(300)
+                    .min(3600);
+                let a = job.window.map(|w| w[0]).unwrap_or(0);
+                set(&mut |s| {
+                    s.note = Some(format!("poza oknem godzin do {a:02}:00"));
+                    s.next_run = Some(ts_in(Duration::from_secs(until)));
+                });
+                *next = Some(Instant::now() + Duration::from_secs(until));
                 return;
             }
             if let Err(reason) = conditions::check(&job.conditions) {
                 log::info!("zadanie „{}”: czeka na warunki: {reason}", job.name);
-                set_status(&inner, &job.id, |s| {
+                set(&mut |s| {
                     s.state = "conditions".into();
-                    s.note = Some(reason);
+                    s.note = Some(reason.clone());
+                    s.next_run = Some(ts_in(Duration::from_secs(60)));
                 });
                 *next = Some(Instant::now() + Duration::from_secs(60));
                 return;
             }
         }
         let lock = inner.lock_for(&job.id);
-        let _guard = lock.lock().unwrap();
-        set_status(&inner, &job.id, |s| {
+        let _guard = lock_ok(&lock);
+        // zadanie mogło zostać zatrzymane/zrestartowane w czasie oczekiwania na blokadę; przebieg
+        // automatyczny wtedy pomijamy, a ręczny (już zaakceptowany przez użytkownika) dokańczamy
+        if !manual && !current() {
+            return;
+        }
+        set(&mut |s| {
             s.state = "running".into();
             s.progress = None;
             s.note = None;
         });
         let report = |done: usize, total: usize, cur: &str| {
-            set_status(&inner, &job.id, |s| {
+            set_status_ep(&inner, &job.id, epoch, |s| {
                 s.progress = Some(Progress {
                     done,
                     total,
@@ -622,7 +785,19 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                 })
             });
         };
-        let res = run_job_with(&job, &dir, false, force, Some(&report));
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            run_job_with(&job, &dir, false, force, Some(&report))
+        }))
+        .unwrap_or_else(|p| {
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            Err(anyhow::anyhow!(
+                "awaria wewnętrzna podczas przebiegu: {msg}"
+            ))
+        });
         match &res {
             Ok(r) => {
                 let busy = r.busy.len();
@@ -644,8 +819,27 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
             }
             Err(e) => log::error!("zadanie „{}”: {e}", job.name),
         }
+        let backoff_d = Duration::from_secs((30u64 << backoff.min(5)).min(600));
+        // ponowienia dotyczą tylko harmonogramów automatycznych: zadanie Manual nigdy nie startuje samo
         let mut retry = None;
-        set_status(&inner, &job.id, |s| {
+        match &res {
+            Ok(rep) => {
+                if rep.needs_retry() && !manual_only {
+                    retry = Some(backoff_d);
+                }
+            }
+            Err(_) => {
+                if !manual_only {
+                    retry = Some(backoff_d);
+                }
+            }
+        }
+        backoff = if retry.is_some() { backoff + 1 } else { 0 };
+        let regular = period(&job.schedule);
+        // przy ponowieniu liczy się backoff (nie krótszy okres harmonogramu); przy braku ponowienia - okres
+        let due = retry.or(regular);
+        *next = due.map(|d| Instant::now() + d);
+        set(&mut |s| {
             s.last_run = Some(Local::now().timestamp());
             s.progress = None;
             match &res {
@@ -659,37 +853,43 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                         "idle"
                     }
                     .into();
-                    if rep.needs_retry() {
-                        retry = Some(Duration::from_secs((30u64 << backoff.min(5)).min(600)));
-                    }
                     s.last = Some(rep.clone());
                 }
                 Err(e) => {
                     s.state = "error".into();
                     s.error = Some(e.to_string());
-                    retry = Some(Duration::from_secs((30u64 << backoff.min(5)).min(600)));
                 }
             }
+            s.next_run = due.map(ts_in);
         });
-        backoff = if retry.is_some() { backoff + 1 } else { 0 };
-        let regular = period(&job.schedule);
-        let due = match (regular, retry) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        *next = due.map(|d| Instant::now() + d);
-        set_status(&inner, &job.id, |s| s.next_run = due.map(ts_in));
     };
 
+    // komunikat odebrany w trakcie debouncingu/oczekiwania na wyzwalacz - wykonywany z własnymi parametrami
+    let mut pending: Option<Msg> = None;
     loop {
+        if !current() {
+            return;
+        }
         let wait = next
             .map(|t| t.saturating_duration_since(Instant::now()))
             .unwrap_or(Duration::from_secs(3600));
-        match rx.recv_timeout(wait) {
+        let msg = match pending.take() {
+            Some(m) => Ok(m),
+            None => rx.recv_timeout(wait),
+        };
+        match msg {
             Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(Msg::RunNow { force }) => {
                 run(force, true, &mut next);
-                refresh(&mut watcher, &mut stale, &inner);
+                refresh(&mut watcher, &mut stale);
+            }
+            Ok(Msg::Resume) => {
+                let paused = lock_ok(&inner.status)
+                    .get(&job.id)
+                    .is_some_and(|s| s.state == "paused");
+                if paused && !manual_only {
+                    next = Some(Instant::now());
+                }
             }
             Ok(Msg::Trigger { kind, vol }) => {
                 let want = match kind.as_str() {
@@ -702,30 +902,58 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                 };
                 if want {
                     log::info!("zadanie „{}”: wyzwalacz „{kind}”", job.name);
-                    thread::sleep(Duration::from_secs(3)); // dysk/sieć potrzebują chwili na ustabilizowanie
+                    // dysk/sieć potrzebują chwili na ustabilizowanie; czekanie przerywa Stop
+                    let until = Instant::now() + Duration::from_secs(3);
+                    let mut skip = false;
+                    loop {
+                        match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+                            Err(RecvTimeoutError::Timeout) => break,
+                            Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+                            Ok(m @ Msg::RunNow { .. }) => {
+                                pending = Some(m); // przebieg ręczny i tak obejmie zmiany
+                                skip = true;
+                                break;
+                            }
+                            Ok(_) => {}
+                        }
+                    }
+                    if !current() {
+                        return;
+                    }
                     watcher = make_watcher(&job, tx.clone()); // dysk/sieć wróciły: nowy uchwyt
-                    run(false, false, &mut next);
-                    refresh(&mut watcher, &mut stale, &inner);
+                    if !skip {
+                        run(false, false, &mut next);
+                    }
+                    refresh(&mut watcher, &mut stale);
                 }
             }
             Ok(Msg::FsEvent) => {
                 // debouncing: czekaj, aż zdarzenia ucichną (maks. 10 s)
                 let start = Instant::now();
+                let mut skip = false;
                 loop {
                     match rx.recv_timeout(Duration::from_millis(1500)) {
                         Ok(Msg::FsEvent) if start.elapsed() < Duration::from_secs(10) => continue,
                         Ok(Msg::FsEvent) | Err(RecvTimeoutError::Timeout) => break,
+                        Ok(Msg::Resume) => continue,
                         Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-                        Ok(Msg::RunNow { .. }) | Ok(Msg::Trigger { .. }) => break,
+                        Ok(m) => {
+                            // RunNow/Trigger zachowują swoje parametry; ręczny przebieg obejmuje też zmiany z FS
+                            skip = matches!(m, Msg::RunNow { .. });
+                            pending = Some(m);
+                            break;
+                        }
                     }
                 }
-                run(false, false, &mut next);
-                refresh(&mut watcher, &mut stale, &inner);
+                if !skip {
+                    run(false, false, &mut next);
+                }
+                refresh(&mut watcher, &mut stale);
             }
             Err(RecvTimeoutError::Timeout) => {
                 if next.is_some() {
                     run(false, false, &mut next);
-                    refresh(&mut watcher, &mut stale, &inner);
+                    refresh(&mut watcher, &mut stale);
                 }
             }
         }
@@ -746,6 +974,28 @@ mod tests {
         assert!(touches_volume(&j, "E:\\"));
         assert!(touches_volume(&j, "e:/"));
         assert!(!touches_volume(&j, "F:\\"));
+    }
+
+    #[test]
+    fn volume_matching_is_by_component() {
+        let j: Job = serde_json::from_value(serde_json::json!({
+            "id":"v","name":"v","left":"/x/USB2/d","right":"gdrive:x","mode":"TwoWay","conflict":"Newer","schedule":{"type":"Manual"}
+        }))
+        .unwrap();
+        assert!(!touches_volume(&j, "/x/USB"));
+        assert!(touches_volume(&j, "/x/USB2"));
+        assert!(!touches_volume(&j, ""));
+    }
+
+    #[test]
+    fn relevant_checks_components_relative_to_root() {
+        let root = PathBuf::from("/data/moje.syncron-dane/L");
+        let roots = [root.clone()];
+        assert!(relevant(&root.join("raport.syncron-kopia.txt"), &roots));
+        assert!(relevant(&root.join(".syncron-dane/x.txt"), &roots));
+        assert!(!relevant(&root.join(".syncron-trash/1/x.txt"), &roots));
+        assert!(!relevant(&root.join(".syncpolak-trash/x"), &roots));
+        assert!(!relevant(&root.join("a.syncron.tmp"), &roots));
     }
 
     #[test]
