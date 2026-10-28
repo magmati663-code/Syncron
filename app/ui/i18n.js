@@ -115,6 +115,8 @@
     "Diagnostyka zawiera wersję, system, stan zadań (bez ścieżek plików) i ostatnie wpisy dziennika — wklej ją w zgłoszeniu problemu.": "Diagnostics contain the version, system, job states (without file paths) and recent log entries — paste them into a bug report.",
     "Diagnostyka skopiowana do schowka": "Diagnostics copied to clipboard", "Diagnostyka": "Diagnostics", "Zaznacz całość (Ctrl/Cmd+A) i skopiuj.": "Select all (Ctrl/Cmd+A) and copy.",
     "przenieś →": "move →", "← przenieś": "← move", "przeniesienie": "move",
+    ") są zawsze pomijane. Wykluczenia możesz też zapisać w pliku": ") are always skipped. You can also keep exclusions in the file",
+    "w głównym folderze (jedna maska na linię,": "in the root folder (one mask per line,", "pomija cały folder) — wędruje razem z danymi.": "skips the whole folder) — it travels with the data.",
     "Zapisano": "Saved", "jeszcze nie": "not yet", "przed chwilą": "just now", "Jeszcze nie uruchomione": "Not run yet",
   };
 
@@ -167,7 +169,7 @@
     [/otwarty w innym programie — ponowię automatycznie/g, "open in another program — will retry automatically"],
     [/Działasz jako administrator — pliki zablokowane przez inne programy będą kopiowane z migawki VSS\./g, "You are an administrator — files locked by other programs will be copied from a VSS snapshot."],
     [/Brak uprawnień administratora — zablokowane pliki będą ponawiane, ale VSS nie zadziała\./g, "No administrator rights — locked files will be retried, but VSS will not work."],
-    [/plik zajęty/g, "file busy"],
+    [/plik zajęty/g, "file busy"], [/Lewa:/g, "Left:"], [/Prawa:/g, "Right:"], [/\(nowsza\)/g, "(newer)"], [/\(większa\)/g, "(larger)"],
     [/po podłączeniu dysku/g, "after a drive is connected"], [/po wybudzeniu z uśpienia/g, "after waking from sleep"], [/po zmianie sieci/g, "after a network change"],
     [/\bna bieżąco\b/g, "continuously"], [/\bręcznie\b/g, "manually"], [/\bcodziennie (\d)/g, "daily at $1"], [/\bco (\d+) min\b/g, "every $1 min"],
     [/, tylko w godzinach/g, ", only between"], [/\(maks\. (\d+) wersji pliku\)/g, "(max. $1 versions of a file)"],

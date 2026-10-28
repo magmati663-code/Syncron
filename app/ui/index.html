@@ -19,7 +19,7 @@
   <div class="grow"></div>
   <div class="side-foot">
     <button id="pauseAll" class="ghost"><span data-i="pause"></span><span class="l" id="pauseTxt">Wstrzymaj wszystko</span></button>
-    <div class="ver">SyncPolak 0.5</div>
+    <div class="ver">SyncPolak 0.6</div>
   </div>
 </aside>
 
@@ -151,7 +151,7 @@
           <p class="muted" style="margin:4px 0 8px">Zaznacz podfoldery do synchronizacji. Bez zaznaczenia synchronizowane jest wszystko. Zaznaczenia dopisują maski w polu „Uwzględnij tylko”.</p>
           <div id="tree"></div>
         </div>
-        <p class="muted">Maski: <code>*</code> = dowolny ciąg, <code>?</code> = jeden znak. Pliki tymczasowe (<code>~$*</code>, <code>.tmp</code>, <code>.DS_Store</code>, <code>Thumbs.db</code>) są zawsze pomijane.</p>
+        <p class="muted">Maski: <code>*</code> = dowolny ciąg, <code>?</code> = jeden znak. Pliki tymczasowe (<code>~$*</code>, <code>.tmp</code>, <code>.DS_Store</code>, <code>Thumbs.db</code>) są zawsze pomijane. Wykluczenia możesz też zapisać w pliku <code>.syncignore</code> w głównym folderze (jedna maska na linię, <code>folder/</code> pomija cały folder) — wędruje razem z danymi.</p>
       </div>
       <!-- 4 -->
       <div class="step" data-step="3">

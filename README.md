@@ -32,10 +32,25 @@ Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
   uruchomienie po podłączeniu dysku, wybudzeniu z uśpienia i zmianie sieci.
 - **Weryfikacja sum kontrolnych** (BLAKE3) po kopiowaniu lokalnym; chmury weryfikuje rclone.
 - **Szyfrowanie po stronie klienta** (rclone crypt) jako konto chmurowe; **wybór podfolderów** i drzewo różnic w symulacji.
+- Ikona w zasobniku zmienia kolor wg stanu (zielona / niebieska / żółta / czerwona / szara); podgląd konfliktu pokazuje rozmiar i czas obu wersji.
 - Powiadomienia systemowe, kopia/import konfiguracji, interfejs PL/EN, automatyczne aktualizacje (wymagają klucza: SIGNING.md).
 - Historia operacji z eksportem CSV i wyszukiwaniem.
 - Interfejs: jasny/ciemny motyw, kreator zadania w 4 krokach z opisem „jak to będzie działać”, szablony (dwustronna, kopia zapasowa, lustro),
   postęp synchronizacji na żywo, ręczne rozstrzyganie konfliktów („Zachowaj lewą/prawą”), podpowiedzi o niedostępnych folderach.
+
+## Linia poleceń i praca bez okna
+Do instalatora dołączona jest wersja `syncpolak` (także jako osobny plik w wydaniu), korzystająca z tego samego folderu danych i zadań:
+```
+syncpolak list                         # zadania
+syncpolak run "Dokumenty" --dry-run    # symulacja (bez --dry-run: uruchomienie; --force pomija zabezpieczenia)
+syncpolak daemon                       # działa w tle według harmonogramów (przeładowuje zadania po zmianie w aplikacji)
+syncpolak service install [--boot]     # usługa: logowanie (domyślnie) lub start systemu (Windows, SYSTEM, wymaga admina)
+syncpolak export/import plik.json
+```
+Kody wyjścia: 0 = ok, 1 = błąd, 2 = konflikty/błędy plików/zablokowanie. Usługa na macOS to agent launchd, na Linuksie usługa systemd użytkownika.
+
+## Pomijanie plików: `.syncignore`
+Plik `.syncignore` w głównym folderze któregokolwiek boku (jedna maska na linię, `#` komentarz, `folder/` pomija cały folder) działa dla obu stron i wędruje razem z danymi.
 
 ## Chmury
 Połączenia z chmurami obsługuje dołączony do instalatora [rclone](https://rclone.org). Konta dodajesz w zakładce

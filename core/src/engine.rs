@@ -21,6 +21,8 @@ pub struct Report {
     /// Pliki przeniesione/przemianowane bez ponownego kopiowania.
     pub moved: usize,
     pub conflicts: Vec<String>,
+    /// Rozmiary i czasy obu wersji plików w konflikcie (podgląd do rozstrzygnięcia).
+    pub conflict_details: Vec<ConflictDetail>,
     /// Pliki zajęte przez inne programy: zostaną ponowione.
     pub busy: Vec<String>,
     pub errors: Vec<String>,
@@ -36,6 +38,13 @@ impl Report {
     pub fn needs_retry(&self) -> bool {
         !self.busy.is_empty() || !self.errors.is_empty()
     }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ConflictDetail {
+    pub path: String,
+    pub left: Option<Meta>,
+    pub right: Option<Meta>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,7 +145,7 @@ enum Out {
     Removed {
         key: String,
     },
-    Conflict(String),
+    Conflict(String, Meta, Meta),
     Busy(String, String),
     Err(String, String),
 }
@@ -323,7 +332,9 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
             Ok(()) => Out::Removed { key: key.into() },
             Err(e) => err_out(key, e),
         },
-        Action::Conflict { keep_both: false } => Out::Conflict(le.unwrap().real.clone()),
+        Action::Conflict { keep_both: false } => {
+            Out::Conflict(le.unwrap().real.clone(), le.unwrap().meta, re.unwrap().meta)
+        }
         Action::Conflict { keep_both: true } => {
             let (le, re) = (le.unwrap(), re.unwrap());
             // wersja z prawej trafia na lewą pod nazwą konfliktową, wersja z lewej wygrywa pod oryginalną nazwą
@@ -354,6 +365,17 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
 /// Postęp wykonywania: (zrobione, wszystkie, bieżący plik).
 pub type ProgressFn<'a> = &'a (dyn Fn(usize, usize, &str) + Sync);
 
+/// Reguły zadania + maski z plików `.syncignore` z korzeni obu lokalizacji (wędrują razem z danymi).
+fn rules_with_ignore(job: &Job, l: &Location, r: &Location) -> crate::rules::RuleSet {
+    let mut rules = job.rules();
+    for loc in [l, r] {
+        if let Some(text) = loc.read_text(".syncignore") {
+            rules.exclude.extend(crate::rules::parse_ignore(&text));
+        }
+    }
+    rules
+}
+
 pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::Result<Report> {
     run_job_with(job, state_dir, dry, force, None)
 }
@@ -371,7 +393,7 @@ pub fn run_job_with(
         ..Default::default()
     };
     let (l, r) = (Location::parse(&job.left), Location::parse(&job.right));
-    let rules = job.rules();
+    let rules = rules_with_ignore(job, &l, &r);
 
     let (lres, rres) = std::thread::scope(|s| {
         let a = s.spawn(|| l.list(&rules));
@@ -495,8 +517,13 @@ pub fn run_job_with(
                 )?;
                 hist("usunięcie", &key, "")?;
             }
-            Out::Conflict(p) => {
+            Out::Conflict(p, l, r) => {
                 hist("konflikt", &p, "wymaga decyzji")?;
+                rep.conflict_details.push(ConflictDetail {
+                    path: p.clone(),
+                    left: Some(l),
+                    right: Some(r),
+                });
                 rep.conflicts.push(p);
             }
             Out::Busy(p, m) => {
@@ -551,7 +578,7 @@ pub fn resolve_conflict(
     left_wins: bool,
 ) -> anyhow::Result<()> {
     let (l, r) = (Location::parse(&job.left), Location::parse(&job.right));
-    let rules = job.rules();
+    let rules = rules_with_ignore(job, &l, &r);
     let key = names::key(path);
     let (ll, rl) = (
         l.list(&rules).map_err(anyhow::Error::msg)?,

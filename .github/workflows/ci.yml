@@ -25,6 +25,6 @@ jobs:
           esac || echo "::warning::nie udało się zainstalować rclone: testy rclone zostaną pominięte"
           rclone version || true
       - name: Testy silnika (Windows, macOS, Linux)
-        run: cargo test -p syncpolak-core -- --nocapture --test-threads=1
-      - name: Clippy silnika
-        run: cargo clippy -p syncpolak-core --all-targets -- -D warnings
+        run: cargo test -p syncpolak-core -p syncpolak-cli -- --nocapture --test-threads=1
+      - name: Clippy silnika i CLI
+        run: cargo clippy -p syncpolak-core -p syncpolak-cli --all-targets -- -D warnings

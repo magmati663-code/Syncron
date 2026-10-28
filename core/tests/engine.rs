@@ -450,3 +450,40 @@ fn bandwidth_limit_slows_local_copy() {
     );
     assert_eq!(fs::read(r.join("duży.bin")).unwrap().len(), 300 * 1024);
 }
+
+#[test]
+fn syncignore_file_excludes_from_both_sides() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join(".syncignore"), "# kopie\n*.bak\nbuild/\n").unwrap();
+    fs::write(l.join("raport.docx"), "x").unwrap();
+    fs::write(l.join("stary.bak"), "x").unwrap();
+    fs::create_dir_all(l.join("projekt/build")).unwrap();
+    fs::write(l.join("projekt/build/wynik.o"), "x").unwrap();
+    fs::write(l.join("projekt/kod.rs"), "x").unwrap();
+    // maski z pliku po prawej stronie też obowiązują
+    fs::write(r.join(".syncignore"), "tajne/\n").unwrap();
+    fs::create_dir_all(r.join("tajne")).unwrap();
+    fs::write(r.join("tajne/klucz.txt"), "x").unwrap();
+    run_job(&job(&l, &r, "TwoWay"), &s, false, false).unwrap();
+    assert!(r.join("raport.docx").exists() && r.join("projekt/kod.rs").exists());
+    assert!(!r.join("stary.bak").exists() && !r.join("projekt/build/wynik.o").exists());
+    assert!(!l.join("tajne/klucz.txt").exists());
+}
+
+#[test]
+fn conflict_details_report_both_versions() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join("a.txt"), "0").unwrap();
+    let mut j = job(&l, &r, "TwoWay");
+    j.conflict = syncpolak_core::plan::Conflict::Ask;
+    run_job(&j, &s, false, false).unwrap();
+    fs::write(l.join("a.txt"), "lewy").unwrap();
+    set_mtime(&l.join("a.txt"), 1_900_000_000);
+    fs::write(r.join("a.txt"), "prawy!!").unwrap();
+    set_mtime(&r.join("a.txt"), 1_900_000_100);
+    let rep = run_job(&j, &s, false, false).unwrap();
+    let d = &rep.conflict_details[0];
+    assert_eq!(d.path, "a.txt");
+    assert_eq!((d.left.unwrap().size, d.right.unwrap().size), (4, 7));
+    assert!(d.right.unwrap().mtime > d.left.unwrap().mtime);
+}

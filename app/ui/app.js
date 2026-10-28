@@ -348,7 +348,7 @@ function renderPending() {
   const out = [];
   for (const j of jobs) {
     const st = overview.status[j.id], r = st?.last; if (!r) continue;
-    r.conflicts.forEach((p) => out.push(`<tr><td><span class="kind warn">konflikt</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted">zmieniono po obu stronach</td><td style="white-space:nowrap"><button class="sm" data-res="left" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj lewą</button> <button class="sm" data-res="right" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj prawą</button></td></tr>`));
+    r.conflicts.forEach((p) => out.push(`<tr><td><span class="kind warn">konflikt</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted">${conflictInfo(r, p)}</td><td style="white-space:nowrap"><button class="sm" data-res="left" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj lewą</button> <button class="sm" data-res="right" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj prawą</button></td></tr>`));
     r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${r.vss_note ? ` · VSS: ${esc(r.vss_note)}` : ""}${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString(LOCALE) + ")" : ""}</td></tr>`));
     r.errors.forEach((p) => out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(p)}</td></tr>`));
     if (st.error) out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(st.error)}</td></tr>`);
@@ -575,3 +575,11 @@ $("#diagCopy").onclick = async () => {
     catch { $("#repTitle").textContent = "Diagnostyka"; $("#repBody").innerHTML = `<p class="muted">Zaznacz całość (Ctrl/Cmd+A) i skopiuj.</p><textarea readonly rows="18" style="font-family:monospace;font-size:12px">${esc(text)}</textarea>`; $("#report").showModal(); }
   } catch (e) { toast(String(e), "bad"); }
 };
+
+// podgląd konfliktu: rozmiar i czas obu wersji, z zaznaczeniem nowszej/większej
+function conflictInfo(rep, path) {
+  const d = (rep.conflict_details || []).find((x) => x.path === path);
+  if (!d || !d.left || !d.right) return "zmieniono po obu stronach";
+  const side = (name, m, o) => `<b>${name}</b> ${fmtSize(m.size)}${m.size > o.size ? " (większa)" : ""}, ${fmtTime(m.mtime)}${m.mtime > o.mtime ? " (nowsza)" : ""}`;
+  return `${side("Lewa:", d.left, d.right)}<br>${side("Prawa:", d.right, d.left)}`;
+}

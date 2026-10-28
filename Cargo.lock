@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "syncpolak-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3872,8 +3872,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "syncpolak-cli"
+version = "0.6.0"
+dependencies = [
+ "chrono",
+ "log",
+ "serde_json",
+ "syncpolak-core",
+ "tempfile",
+]
+
+[[package]]
 name = "syncpolak-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "blake3",

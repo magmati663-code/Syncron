@@ -263,6 +263,14 @@ impl Location {
         }
     }
 
+    /// Odczytuje mały plik tekstowy (np. `.syncignore`); brak pliku lub błąd = None.
+    pub fn read_text(&self, rel: &str) -> Option<String> {
+        match self {
+            Location::Local(p) => fs::read_to_string(local_full(p, rel)).ok(),
+            Location::Rclone(_) => run_rclone(&["cat", &self.full(rel)]).ok(),
+        }
+    }
+
     /// Kopiuje plik do kosza synchronizacji (przed nadpisaniem).
     pub fn backup(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
         let trash_rel = format!("{TRASH_DIR}/{stamp}/{rel}");

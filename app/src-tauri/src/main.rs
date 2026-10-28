@@ -84,6 +84,50 @@ fn init_logging(dir: &std::path::Path) {
     );
 }
 
+/// Ikona zasobnika z kolorową kropką stanu (zielona: ok, niebieska: trwa, żółta: uwaga, czerwona: błąd, szara: wstrzymane).
+fn badge_icon(base: &tauri::image::Image<'_>, color: [u8; 3]) -> tauri::image::Image<'static> {
+    let (w, h) = (base.width() as i32, base.height() as i32);
+    let mut px = base.rgba().to_vec();
+    let (cx, cy, r) = (w as f32 * 0.74, h as f32 * 0.74, w as f32 * 0.24);
+    for y in 0..h {
+        for x in 0..w {
+            let d = (((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)) as f32).sqrt();
+            let i = ((y * w + x) * 4) as usize;
+            if d <= r * 1.28 && d > r {
+                px[i..i + 4].copy_from_slice(&[255, 255, 255, 255]); // biała obwódka
+            } else if d <= r {
+                px[i..i + 4].copy_from_slice(&[color[0], color[1], color[2], 255]);
+            }
+        }
+    }
+    tauri::image::Image::new_owned(px, w as u32, h as u32)
+}
+
+/// Ogólny stan do ikony i podpowiedzi: (kolor, klucz).
+fn overall_state(r: &Runner) -> (&'static str, [u8; 3]) {
+    if r.is_paused() {
+        return ("paused", [120, 130, 150]);
+    }
+    let st = r.status();
+    let any = |f: &dyn Fn(&Status) -> bool| st.values().any(f);
+    if any(&|s| s.state == "error" || s.state == "blocked") {
+        ("error", [220, 38, 38])
+    } else if any(&|s| {
+        s.state == "waiting"
+            || s.state == "conditions"
+            || s.last
+                .as_ref()
+                .map(|l| !l.conflicts.is_empty())
+                .unwrap_or(false)
+    }) {
+        ("attention", [217, 119, 6])
+    } else if any(&|s| s.state == "running") {
+        ("running", [37, 99, 235])
+    } else {
+        ("ok", [22, 163, 74])
+    }
+}
+
 fn kind_of(loc: &str) -> String {
     match syncpolak_core::location::Location::parse(loc) {
         syncpolak_core::location::Location::Rclone(s) => {
@@ -578,18 +622,40 @@ fn import_config(r: State<Runner>, path: String) -> Res<usize> {
 }
 
 /// Wątek powiadomień systemowych: nowy błąd, zatrzymanie przez zabezpieczenie, nowy konflikt.
-fn spawn_notifier(app: tauri::AppHandle) {
+fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon) {
     use tauri_plugin_notification::NotificationExt;
     std::thread::spawn(move || {
         let mut seen: HashMap<String, (String, usize)> = HashMap::new();
         // od kiedy zadanie jest w stanie błędu (czas, czy wysłano powiadomienie o długiej niedostępności)
         let mut down: HashMap<String, (std::time::Instant, bool)> = HashMap::new();
+        let mut last_state = String::new();
         loop {
             std::thread::sleep(std::time::Duration::from_secs(4));
             let r = app.state::<Runner>();
             let st = load_settings(&r);
             let en = st.language == "en";
             let jobs = r.load_jobs();
+            // ikona i podpowiedź w zasobniku zależą od ogólnego stanu
+            let (state, color) = overall_state(&r);
+            if state != last_state {
+                last_state = state.to_string();
+                if let Some(base) = app.default_window_icon() {
+                    let _ = tray.set_icon(Some(badge_icon(base, color)));
+                }
+                let tip = match (state, en) {
+                    ("paused", false) => "SyncPolak — wstrzymane",
+                    ("error", false) => "SyncPolak — błąd lub zatrzymanie",
+                    ("attention", false) => "SyncPolak — coś wymaga uwagi",
+                    ("running", false) => "SyncPolak — synchronizuję",
+                    (_, false) => "SyncPolak — wszystko w porządku",
+                    ("paused", true) => "SyncPolak — paused",
+                    ("error", true) => "SyncPolak — error or stopped",
+                    ("attention", true) => "SyncPolak — needs attention",
+                    ("running", true) => "SyncPolak — syncing",
+                    _ => "SyncPolak — all good",
+                };
+                let _ = tray.set_tooltip(Some(tip));
+            }
             for (id, s) in r.status() {
                 let name = jobs
                     .iter()
@@ -736,7 +802,6 @@ fn main() {
             runner.start_all();
             runner.start_monitor(); // dysk podłączony / wybudzenie / zmiana sieci
             app.manage(runner);
-            spawn_notifier(app.handle().clone());
 
             let show = MenuItem::with_id(app, "show", "Otwórz SyncPolak", true, None::<&str>)?;
             let pause = MenuItem::with_id(
@@ -748,7 +813,7 @@ fn main() {
             )?;
             let quit = MenuItem::with_id(app, "quit", "Zakończ", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &pause, &quit])?;
-            TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("SyncPolak")
                 .menu(&menu)
@@ -770,6 +835,7 @@ fn main() {
                     }
                 })
                 .build(app)?;
+            spawn_notifier(app.handle().clone(), tray);
 
             if std::env::args().any(|a| a == "--hidden") {
                 if let Some(w) = app.get_webview_window("main") {

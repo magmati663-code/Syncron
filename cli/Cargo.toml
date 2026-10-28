@@ -1,0 +1,18 @@
+[package]
+name = "syncpolak-cli"
+version = "0.6.0"
+edition = "2021"
+description = "SyncPolak: wersja z linią poleceń i trybem usługi (bez interfejsu graficznego)"
+
+[[bin]]
+name = "syncpolak"
+path = "src/main.rs"
+
+[dependencies]
+syncpolak-core = { path = "../core" }
+serde_json = "1"
+log = { version = "0.4", features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3"

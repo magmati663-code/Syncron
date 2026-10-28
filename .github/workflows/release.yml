@@ -89,6 +89,14 @@ jobs:
           else
             echo "Brak sekretu TAURI_SIGNING_PRIVATE_KEY: bez artefaktów aktualizacji."
           fi
+      - name: Budowa wersji z linią poleceń (dołączana do instalatora i do wydania)
+        shell: bash
+        run: |
+          T="${{ matrix.target }}"
+          if [ -n "$T" ]; then cargo build -p syncpolak-cli --release --target "$T"; SRC="target/$T/release/syncpolak"; else cargo build -p syncpolak-cli --release; SRC="target/release/syncpolak"; fi
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          cp "$SRC$EXT" "app/src-tauri/bin/syncpolak$EXT"
+          mkdir -p cli-out && cp "$SRC$EXT" "cli-out/syncpolak-cli-${{ matrix.rclone }}$EXT"
       - name: Zależności Node (Tauri CLI)
         working-directory: app
         run: npm install
@@ -104,3 +112,10 @@ jobs:
           releaseBody: "Instalatory: Windows (.exe/.msi), macOS (.dmg). Podpis zależy od certyfikatów w sekretach repozytorium (SIGNING.md); bez nich system pokaże ostrzeżenie."
           releaseDraft: false
           args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+      - name: Wersja CLI jako osobny plik w wydaniu
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER=$(node -p "require('./app/package.json').version")
+          gh release upload "v$VER" cli-out/* --clobber --repo "${{ github.repository }}"

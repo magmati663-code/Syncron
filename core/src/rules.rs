@@ -32,6 +32,25 @@ impl Default for RuleSet {
     }
 }
 
+/// Reguły z pliku `.syncignore` (jedna maska na linię, `#` = komentarz, `nazwa/` = cały folder na dowolnej głębokości).
+pub fn parse_ignore(text: &str) -> Vec<Rule> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        match l.strip_suffix('/') {
+            Some(dir) => {
+                out.push(Rule::Glob(format!("{dir}/*")));
+                out.push(Rule::Glob(format!("*/{dir}/*")));
+            }
+            None => out.push(Rule::Glob(l.to_string())),
+        }
+    }
+    out
+}
+
 pub fn glob(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.to_lowercase().chars().collect();
     let t: Vec<char> = text.to_lowercase().chars().collect();
@@ -80,6 +99,22 @@ mod tests {
             path: p.into(),
             size: s,
         }
+    }
+
+    #[test]
+    fn syncignore_parsing() {
+        let rs = RuleSet {
+            exclude: parse_ignore("# komentarz\n\n*.bak\nnode_modules/\n"),
+            ..Default::default()
+        };
+        let f = |p: &str| FileInfo {
+            path: p.into(),
+            size: 1,
+        };
+        assert!(!rs.allows(&f("a/b.bak")));
+        assert!(!rs.allows(&f("node_modules/x/y.js")));
+        assert!(!rs.allows(&f("projekt/node_modules/x.js")));
+        assert!(rs.allows(&f("projekt/src/x.js")));
     }
 
     #[test]

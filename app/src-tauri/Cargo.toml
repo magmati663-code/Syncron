@@ -1,6 +1,6 @@
 [package]
 name = "syncpolak-app"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "SyncPolak: synchronizacja folderów, dysków sieciowych i chmur"
 
