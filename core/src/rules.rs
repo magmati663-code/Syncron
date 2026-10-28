@@ -1,5 +1,6 @@
 //! Reguły filtrowania plików.
 use crate::names::is_temp;
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, Default)]
 pub struct FileInfo {
@@ -32,37 +33,96 @@ impl Default for RuleSet {
     }
 }
 
-/// Reguły z pliku `.syncignore` (jedna maska na linię, `#` = komentarz, `nazwa/` = cały folder na dowolnej głębokości).
+/// Dekoduje zawartość pliku tekstowego (np. `.syncignore`): UTF-8 (z BOM lub bez), UTF-16 LE/BE (BOM, np. z Notatnika
+/// Windows); w pozostałych przypadkach (np. Windows-1250) dekodowanie z zamianą nieprawidłowych bajtów na U+FFFD, tak
+/// by pozostałe linie nadal działały (zamiast ignorowania całego pliku).
+pub fn decode_text(bytes: &[u8]) -> String {
+    let utf16 = |b: &[u8], le: bool| {
+        let units = b.chunks_exact(2).map(|c| {
+            if le {
+                u16::from_le_bytes([c[0], c[1]])
+            } else {
+                u16::from_be_bytes([c[0], c[1]])
+            }
+        });
+        char::decode_utf16(units)
+            .map(|r| r.unwrap_or('\u{fffd}'))
+            .collect::<String>()
+    };
+    if let Some(b) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return utf16(b, true);
+    }
+    if let Some(b) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return utf16(b, false);
+    }
+    let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(b).into_owned()
+}
+
+/// Reguły z pliku `.syncignore` (jedna maska na linię, `#` = komentarz, `nazwa/` = cały folder na dowolnej głębokości,
+/// `/nazwa/` = folder tylko w korzeniu; wiodący `/` oznacza maskę względem korzenia i jest usuwany; BOM jest pomijany).
 pub fn parse_ignore(text: &str) -> Vec<Rule> {
     let mut out = Vec::new();
-    for line in text.lines() {
-        let l = line.trim();
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let l = line.trim().trim_start_matches('\u{feff}');
         if l.is_empty() || l.starts_with('#') {
             continue;
         }
+        let anchored = l.starts_with('/');
+        let l = l.trim_start_matches('/');
+        if l.is_empty() {
+            continue;
+        }
         match l.strip_suffix('/') {
-            Some(dir) => {
+            Some(dir) if !dir.is_empty() => {
                 out.push(Rule::Glob(format!("{dir}/*")));
-                out.push(Rule::Glob(format!("*/{dir}/*")));
+                if !anchored {
+                    out.push(Rule::Glob(format!("*/{dir}/*")));
+                }
             }
+            Some(_) => {}
             None => out.push(Rule::Glob(l.to_string())),
         }
     }
     out
 }
 
+/// NFC + małe litery znak po znaku (jeden znak -> jeden znak; gdy małe litery rozbijają znak, np. `İ`, zostaje on sam).
+fn fold(s: &str) -> Vec<char> {
+    s.nfc()
+        .map(|c| {
+            let mut it = c.to_lowercase();
+            match (it.next(), it.next()) {
+                (Some(l), None) => l,
+                _ => c,
+            }
+        })
+        .collect()
+}
+
+/// Dopasowanie maski (`*` = dowolny ciąg, także `/`; `?` = jeden znak) bez rozróżniania wielkości liter, po
+/// normalizacji NFC obu argumentów. Iteracyjne (cofanie do ostatniej gwiazdki): czas O(n·m), bez wykładniczego ReDoS.
 pub fn glob(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.to_lowercase().chars().collect();
-    let t: Vec<char> = text.to_lowercase().chars().collect();
-    fn go(p: &[char], t: &[char]) -> bool {
-        match p.first() {
-            None => t.is_empty(),
-            Some('*') => (0..=t.len()).any(|i| go(&p[1..], &t[i..])),
-            Some('?') => !t.is_empty() && go(&p[1..], &t[1..]),
-            Some(c) => t.first() == Some(c) && go(&p[1..], &t[1..]),
+    let p = fold(pattern);
+    let t = fold(text);
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None; // (pozycja po gwiazdce we wzorcu, pozycja w tekście)
+    while ti < t.len() {
+        if pi < p.len() && p[pi] == '*' {
+            pi += 1;
+            star = Some((pi, ti));
+        } else if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if let Some((sp, st)) = star {
+            star = Some((sp, st + 1));
+            pi = sp;
+            ti = st + 1;
+        } else {
+            return false;
         }
     }
-    go(&p, &t)
+    p[pi..].iter().all(|c| *c == '*')
 }
 
 impl Rule {

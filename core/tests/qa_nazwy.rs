@@ -361,7 +361,6 @@ fn r2_parse_ignore_folder_nie_lapie_podobnych_nazw() {
 }
 
 #[test]
-#[ignore = "BUG: .syncignore z BOM UTF-8 (Notepad) - pierwsza linia jest ignorowana (maska \\u{feff}*.bak nic nie dopasowuje)"]
 fn r2_parse_ignore_bom() {
     let rs = RuleSet {
         exclude: parse_ignore("\u{feff}*.bak\nsekret.txt\n"),
@@ -374,7 +373,6 @@ fn r2_parse_ignore_bom() {
 }
 
 #[test]
-#[ignore = "BUG: maska zakotwiczona '/dir/' (styl gitignore) w .syncignore nic nie wyklucza"]
 fn r2_parse_ignore_zakotwiczona_sciezka() {
     let rs = RuleSet {
         exclude: parse_ignore("/prywatne/\n"),
@@ -384,7 +382,6 @@ fn r2_parse_ignore_zakotwiczona_sciezka() {
 }
 
 #[test]
-#[ignore = "BUG: glob nie normalizuje Unicode - maska NFC nie pasuje do nazwy NFD (macOS)"]
 fn r2_glob_maska_nfc_nazwa_nfd() {
     assert!(glob("zażółć*", &nfd("zażółć gęślą.txt")));
     let rs = RuleSet {
@@ -398,25 +395,21 @@ fn r2_glob_maska_nfc_nazwa_nfd() {
 }
 
 #[test]
-#[ignore = "BUG: glob nie normalizuje Unicode - maska NFD nie pasuje do nazwy NFC"]
 fn r2_glob_maska_nfd_nazwa_nfc() {
     assert!(glob(&nfd("zażółć*"), "zażółć gęślą.txt"));
 }
 
 #[test]
-#[ignore = "BUG: '?' liczy punkty kodowe - litera NFD (ą = a+ogonek) to 2 znaki"]
 fn r2_glob_pytajnik_a_nfd() {
     assert!(glob("?.txt", &nfd("ą.txt")));
 }
 
 #[test]
-#[ignore = "BUG: to_lowercase rozbija 'İ' na 2 znaki, '?' go nie dopasowuje"]
 fn r2_glob_pytajnik_a_wielkie_i_z_kropka() {
     assert!(glob("?stanbul", "İstanbul"));
 }
 
 #[test]
-#[ignore = "BUG: glob wykladniczy (ReDoS) przy wielu '*' i braku dopasowania"]
 fn r2_glob_redos() {
     let pat = format!("{}b", "*a".repeat(12));
     let text = "a".repeat(60);
@@ -431,7 +424,6 @@ fn r2_glob_redos() {
 }
 
 #[test]
-#[ignore = "BUG: glob wykladniczy przez RuleSet::allows (maska uzytkownika / .syncignore z synchronizowanego folderu)"]
 fn r2_rules_redos_przez_allows() {
     let rs = RuleSet {
         exclude: parse_ignore(&format!("{}x.log\n", "*_".repeat(10))),
@@ -591,7 +583,6 @@ fn r2_nazwa_255_bajtow_blad_nie_panika() {
 }
 
 #[test]
-#[ignore = "BUG: nazwa kopii konfliktowej (dopisek ' (konflikt RRRR-MM-DD)') przekracza 255 B dla dlugich nazw - zachowanie obu wersji sie nie udaje (do weryfikacji skutkow)"]
 fn r2_conflict_name_miesci_sie_w_255() {
     let n = format!("{}.txt", "a".repeat(240));
     assert!(conflict_name(&n, "2026-10-28").len() <= 255);
@@ -631,7 +622,6 @@ fn r2_keep_both_dwa_konflikty_tego_samego_dnia() {
 }
 
 #[test]
-#[ignore = "BUG: .syncignore zapisany w Windows-1250/UTF-16 (nie-UTF-8) jest po cichu ignorowany (read_to_string -> None) - wykluczone pliki sa synchronizowane"]
 fn r2_syncignore_nie_utf8_nie_jest_ignorowany() {
     let (_t, l, r, s) = setup();
     // CP1250: 'ł' = 0xB3
@@ -657,7 +647,7 @@ fn r2_nazwa_nie_utf8() {
 }
 
 #[test]
-#[ignore = "BUG: zmiana tylko wielkosci liter nazwy (a.txt -> A.txt) nie propaguje sie na druga strone"]
+#[ignore = "DECYZJA: zmiana tylko wielkosci liter nazwy (a.txt -> A.txt) nie propaguje sie na druga strone - WYNIKA Z PROJEKTU: klucz nazw jest niewrazliwy na wielkosc liter (names::key); zmiana wymagalaby sledzenia nazw w stanie (inny obszar)"]
 fn r2_zmiana_wielkosci_liter_nazwy_propaguje_sie() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("raport.txt"), "x").unwrap();
@@ -682,7 +672,6 @@ fn r2_invalid_on_windows_nieuzywane() {
 }
 
 #[test]
-#[ignore = "BUG: zastrzezone nazwy Windows COM¹/COM²/COM³/LPT¹.. oraz CONIN$/CONOUT$ nie sa wykrywane"]
 fn r2_zastrzezone_rozszerzone() {
     for n in ["COM¹", "LPT².txt", "COM³", "CONIN$", "CONOUT$"] {
         assert!(invalid_on_windows(n), "{n}");
@@ -690,13 +679,11 @@ fn r2_zastrzezone_rozszerzone() {
 }
 
 #[test]
-#[ignore = "BUG: 'con .txt' (spacje przed kropka) to nazwa zastrzezona na Windows"]
 fn r2_zastrzezone_ze_spacja_przed_kropka() {
     assert!(invalid_on_windows("con .txt"));
 }
 
 #[test]
-#[ignore = "BUG: invalid_on_windows nie sprawdza limitu 255 jednostek UTF-16"]
 fn r2_dlugosc_nazwy_windows() {
     assert!(invalid_on_windows(&"a".repeat(256)));
     assert!(invalid_on_windows(&"😀".repeat(200)));
@@ -818,7 +805,6 @@ fn r3_key_idempotentne_na_probce() {
 }
 
 #[test]
-#[ignore = "BUG (niska): key() = nfc().lowercase() nie jest niezmiennicze wzgledem NFC/NFD ani idempotentne dla egzotycznych sekwencji greckich (np. 'ћῌ\u{342}') - ta sama nazwa NFC/NFD moze dac rozne klucze"]
 fn r3_key_idempotentne_i_nfd_niezmiennicze_losowe() {
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = || {
@@ -856,7 +842,6 @@ fn r3_key_idempotentne_i_nfd_niezmiennicze_losowe() {
 }
 
 #[test]
-#[ignore = "BUG (do weryfikacji): key() - kontekstowe male litery: 'ΑΣ' -> 'ας' (sigma koncowa), a 'ασ' -> 'ασ': ta sama nazwa o roznej wielkosci liter nie jest wykryta jako kolizja (grecki)"]
 fn r3_key_sigma_koncowa() {
     assert_eq!(key("ΑΣ"), key("ασ"));
 }
