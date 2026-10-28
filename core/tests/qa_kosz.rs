@@ -201,7 +201,6 @@ fn r1_versions_cap_via_run_job_keeps_newest() {
 // ------------------------------------------------------------ RUNDA 2
 
 #[test]
-#[ignore = "BUG T4-01: dwa nadpisania w tej samej sekundzie -> ten sam folder przebiegu, druga kopia nadpisuje pierwszą (utrata wersji)"]
 fn r2_two_runs_same_second_keep_both_versions() {
     let (_t, l, r, s) = setup();
     put(&l, "a.txt", "v1");
@@ -221,7 +220,6 @@ fn r2_two_runs_same_second_keep_both_versions() {
 }
 
 #[test]
-#[ignore = "BUG T4-01: usunięcie, odtworzenie i ponowne usunięcie w tej samej sekundzie nadpisuje poprzednią wersję w koszu"]
 fn r2_delete_recreate_delete_same_second() {
     let l = tempfile::tempdir().unwrap();
     let lc = loc(l.path());
@@ -233,7 +231,6 @@ fn r2_delete_recreate_delete_same_second() {
 }
 
 #[test]
-#[ignore = "BUG T4-08 (WYSOKA, bezpieczeństwo): restore_trash nie waliduje stamp; `..` pozwala skopiować plik spoza kosza"]
 fn r2_restore_traversal_via_stamp_does_not_read_outside_trash() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("deep").join("R");
@@ -247,7 +244,6 @@ fn r2_restore_traversal_via_stamp_does_not_read_outside_trash() {
 }
 
 #[test]
-#[ignore = "BUG T4-08 (WYSOKA, bezpieczeństwo): restore_trash z path zawierającym `..` zapisuje plik POZA folderem synchronizacji"]
 fn r2_restore_traversal_via_path_does_not_write_outside_root() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("deep").join("R");
@@ -262,7 +258,6 @@ fn r2_restore_traversal_via_path_does_not_write_outside_root() {
 }
 
 #[test]
-#[ignore = "BUG T4-08 (KRYTYCZNA): delete_trash(Some(\"..\"), None) wykonuje remove_dir_all na folderze synchronizacji"]
 fn r2_delete_trash_stamp_dotdot_must_not_wipe_root() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("R");
@@ -276,7 +271,6 @@ fn r2_delete_trash_stamp_dotdot_must_not_wipe_root() {
 }
 
 #[test]
-#[ignore = "BUG T4-08 (WYSOKA): delete_trash z `..` w path kasuje żywy plik poza koszem"]
 fn r2_delete_trash_path_dotdot_must_not_delete_live_file() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("R");
@@ -308,7 +302,6 @@ fn r2_absolute_and_empty_values_are_harmless() {
 }
 
 #[test]
-#[ignore = "BUG T4-04: delete_trash(None, Some(path)) kasuje CAŁY kosz (path ignorowany)"]
 fn r2_delete_trash_none_some_must_not_wipe_everything() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("R");
@@ -339,7 +332,6 @@ fn r2_restore_missing_source_returns_error() {
 }
 
 #[test]
-#[ignore = "BUG T4-05: nieudane przywracanie (brak źródła) zostawia puste, utworzone foldery; komunikat błędu bez polskiego kontekstu"]
 fn r2_restore_missing_source_leaves_no_empty_dirs() {
     let t = tempfile::tempdir().unwrap();
     let r = loc(t.path()).restore_trash("2026-01-01_000000", "nowy/podkat/a.txt");
@@ -396,7 +388,6 @@ fn r2_retention_days_boundaries() {
 }
 
 #[test]
-#[ignore = "BUG T4-09: purge_trash(u32::MAX) panikuje (przepełnienie daty w chrono, location.rs:480) - trash_days z konfiguracji/importu"]
 fn r2_retention_extreme_days_no_panic() {
     let t = tempfile::tempdir().unwrap();
     put(t.path(), ".syncron-trash/2000-01-01_000000/a.txt", "x");
@@ -405,7 +396,6 @@ fn r2_retention_extreme_days_no_panic() {
 }
 
 #[test]
-#[ignore = "BUG T4-02: purge_trash panikuje (n[..10] na granicy znaku UTF-8) dla folderu z polskimi znakami w .syncron-trash"]
 fn r2_purge_non_ascii_folder_name_no_panic() {
     let t = tempfile::tempdir().unwrap();
     put(t.path(), ".syncron-trash/ażółćżółć/a.txt", "x");
@@ -413,7 +403,6 @@ fn r2_purge_non_ascii_folder_name_no_panic() {
 }
 
 #[test]
-#[ignore = "BUG T4-03 (niska): purge usuwa foldery spoza formatu YYYY-MM-DD_HHMMSS (np. 2000-moje-dokumenty)"]
 fn r2_purge_only_removes_valid_stamp_folders() {
     let t = tempfile::tempdir().unwrap();
     put(t.path(), ".syncron-trash/2000-moje-dokumenty/a.txt", "x");
@@ -430,7 +419,6 @@ fn r2_purge_only_removes_valid_stamp_folders() {
 }
 
 #[test]
-#[ignore = "BUG T4-06: obcy plik w korzeniu .syncron-trash powoduje błąd list_trash (cały kosz niewidoczny, cap_versions cicho nic nie robi)"]
 fn r2_stray_file_in_trash_root_does_not_break_listing() {
     let t = tempfile::tempdir().unwrap();
     put(t.path(), ".syncron-trash/2026-01-01_000000/a.txt", "x");
@@ -459,7 +447,6 @@ fn r2_polish_names_deep_paths_roundtrip() {
 }
 
 #[test]
-#[ignore = "BUG T4-07 (niska): trash_* z nieznanym side (np. literówka) działa po cichu na prawej stronie"]
 fn r2_unknown_side_is_rejected() {
     let (_t, l, r, _s) = setup();
     put(&r, ".syncron-trash/s/a.txt", "x");
@@ -495,7 +482,6 @@ fn r3_cap_versions_many_files_under_load() {
 }
 
 #[test]
-#[ignore = "BUG T4-10 (niska): cap_versions zostawia puste foldery przebiegów z pustymi podfolderami (usuwa tylko puste foldery pierwszego poziomu)"]
 fn r3_cap_versions_cleans_empty_stamp_dirs() {
     let t = tempfile::tempdir().unwrap();
     for d in 1..=5 {

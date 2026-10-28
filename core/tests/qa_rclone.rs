@@ -721,8 +721,8 @@ fn r2_trash_api_on_remote() {
     assert!(trash_list(&j).unwrap().iter().all(|i| i.path != "f0.txt"));
     loc.delete_trash(None, None).unwrap();
     assert!(!f.cloud.join(".syncron-trash").exists());
-    // purge pustego kosza: "directory not found" nie jest błędem
-    loc.delete_trash(None, None).unwrap_err();
+    // usunięcie pustego kosza: "directory not found" nie jest błędem (T8-12)
+    loc.delete_trash(None, None).unwrap();
     assert!(loc.list_trash().unwrap().is_empty());
     // list_dirs
     write(&f.cloud.join("Podfolder ą/x.txt"), "x");
@@ -744,7 +744,6 @@ fn r2_trash_dir_error_is_distinguished_from_missing() {
 }
 
 #[test]
-#[ignore = "BUG: delete_trash(None,None) na pustym koszu zwraca błąd 'directory not found' z purge zamiast Ok (lokalnie jest Ok)"]
 fn r2_delete_empty_remote_trash_is_ok() {
     let _f = fx();
     Location::parse("fake:")
@@ -753,7 +752,6 @@ fn r2_delete_empty_remote_trash_is_ok() {
 }
 
 #[test]
-#[ignore = "BUG: purge_trash na rclone używa --min-age (czas MODYFIKACJI), a plik w koszu zachowuje stary mtime — kosz starych plików jest kasowany w tym samym przebiegu"]
 fn r2_remote_trash_survives_purge_for_old_files() {
     let f = fx();
     let j = f.job("fake:", json!({"trash_days": 30}));

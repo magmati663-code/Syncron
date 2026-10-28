@@ -48,7 +48,6 @@ fn dirs() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 // ======================================================================
 
 #[test]
-#[ignore = "BUG T9-01: restore_trash z path='../x' zapisuje plik poza korzeniem zadania"]
 fn trash_restore_path_dotdot_nie_wychodzi_poza_korzen() {
     let (t, l, _r, _s) = dirs();
     fs::create_dir_all(l.join(".syncron-trash/s")).unwrap();
@@ -63,7 +62,6 @@ fn trash_restore_path_dotdot_nie_wychodzi_poza_korzen() {
 }
 
 #[test]
-#[ignore = "BUG T9-01: restore_trash ze stamp='../..' kopiuje dowolny plik z dysku do folderu synchronizowanego"]
 fn trash_restore_stamp_dotdot_nie_czyta_spoza_kosza() {
     let (t, l, _r, _s) = dirs();
     fs::create_dir_all(l.join(".syncron-trash")).unwrap();
@@ -77,7 +75,6 @@ fn trash_restore_stamp_dotdot_nie_czyta_spoza_kosza() {
 }
 
 #[test]
-#[ignore = "BUG T9-01: delete_trash ze stamp='../../x' usuwa katalog poza koszem/korzeniem (remove_dir_all)"]
 fn trash_delete_stamp_dotdot_nie_usuwa_poza_koszem() {
     let (t, l, _r, _s) = dirs();
     fs::create_dir_all(l.join(".syncron-trash")).unwrap();
@@ -93,7 +90,6 @@ fn trash_delete_stamp_dotdot_nie_usuwa_poza_koszem() {
 }
 
 #[test]
-#[ignore = "BUG T9-01: delete_trash (stamp, path='../../plik') usuwa żywy plik użytkownika w folderze zadania"]
 fn trash_delete_path_dotdot_nie_usuwa_zywych_plikow() {
     let (t, l, _r, _s) = dirs();
     fs::create_dir_all(l.join(".syncron-trash/s")).unwrap();

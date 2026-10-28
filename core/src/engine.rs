@@ -629,19 +629,19 @@ pub struct TrashItem {
     pub size: u64,
 }
 
-fn side_loc(job: &Job, side: &str) -> Location {
-    Location::parse(if side == "left" {
-        &job.left
-    } else {
-        &job.right
-    })
+fn side_loc(job: &Job, side: &str) -> anyhow::Result<Location> {
+    match side {
+        "left" => Ok(Location::parse(&job.left)),
+        "right" => Ok(Location::parse(&job.right)),
+        _ => anyhow::bail!("Nieznana strona zadania: {side} (dozwolone: left, right)"),
+    }
 }
 
 /// Kosz i wersje plików obu stron zadania (strona niedostępna jest pomijana, o ile druga działa).
 pub fn trash_list(job: &Job) -> anyhow::Result<Vec<TrashItem>> {
     let (mut out, mut errs) = (Vec::new(), Vec::new());
     for side in ["left", "right"] {
-        match side_loc(job, side).list_trash() {
+        match side_loc(job, side)?.list_trash() {
             Ok(v) => out.extend(v.into_iter().map(|(stamp, path, size)| TrashItem {
                 side: side.into(),
                 stamp,
@@ -658,7 +658,7 @@ pub fn trash_list(job: &Job) -> anyhow::Result<Vec<TrashItem>> {
 }
 
 pub fn trash_restore(job: &Job, side: &str, stamp: &str, path: &str) -> anyhow::Result<String> {
-    side_loc(job, side)
+    side_loc(job, side)?
         .restore_trash(stamp, path)
         .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
@@ -669,7 +669,7 @@ pub fn trash_delete(
     stamp: Option<&str>,
     path: Option<&str>,
 ) -> anyhow::Result<()> {
-    side_loc(job, side)
+    side_loc(job, side)?
         .delete_trash(stamp, path)
         .map_err(|e| anyhow::anyhow!(e.to_string()))
 }

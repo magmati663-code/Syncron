@@ -846,7 +846,6 @@ fn r3_chaos_converges_without_loss_and_is_repeatable() {
 }
 
 #[test]
-#[ignore = "BUG: kosz używa znacznika z dokładnością do sekundy; dwa nadpisania tego samego pliku w tej samej sekundzie nadpisują poprzednią wersję w koszu (utrata historii wersji)"]
 fn r3_two_overwrites_in_same_second_keep_both_old_versions_in_trash() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "wersja-1").unwrap();
