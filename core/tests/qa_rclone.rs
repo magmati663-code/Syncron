@@ -2,6 +2,9 @@
 //! (`tests/fixtures/fake_rclone.py`, wskazywana przez SYNCRON_RCLONE). Wymaga python3.
 //! Zmienne środowiskowe są globalne dla procesu, więc każdy test trzyma `Fx` (Mutex).
 //! Testy oznaczone `#[ignore = "BUG: ..."]` odtwarzają błędy, które istnieją w kodzie.
+//! Atrapa to skrypt Pythona uruchamiany bezpośrednio (shebang), więc plik działa tylko na Unixie;
+//! prawdziwy rclone jest testowany na wszystkich systemach w `rclone.rs`.
+#![cfg(unix)]
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
