@@ -18,6 +18,8 @@ pub struct Report {
     pub scanned_right: usize,
     pub copied: usize,
     pub deleted: usize,
+    /// Pliki przeniesione/przemianowane bez ponownego kopiowania.
+    pub moved: usize,
     pub conflicts: Vec<String>,
     /// Pliki zajęte przez inne programy: zostaną ponowione.
     pub busy: Vec<String>,
@@ -119,6 +121,12 @@ pub fn reset_state(state_dir: &Path, job: &str) -> anyhow::Result<()> {
 }
 
 enum Out {
+    Moved {
+        old: String,
+        key: String,
+        l: Meta,
+        r: Meta,
+    },
     Synced {
         key: String,
         l: Meta,
@@ -141,6 +149,97 @@ struct Ctx<'a> {
     trash: &'a str, // pusty = bez kosza
     date: &'a str,
     o: &'a Opts,
+}
+
+/// Para „usunięty plik + nowy plik o tym samym rozmiarze i czasie” to przeniesienie: po stronie docelowej
+/// wystarczy zmienić ścieżkę zamiast kopiować od nowa (oszczędza transfer, zwłaszcza w chmurze).
+fn detect_moves(
+    actions: &mut BTreeMap<String, Action>,
+    lt: &Tree,
+    rt: &Tree,
+    bl: &Tree,
+    br: &Tree,
+) {
+    fn pair(
+        actions: &mut BTreeMap<String, Action>,
+        known: &Tree,
+        del: Action,
+        copy: Action,
+        old_tree: &Tree,
+        new_tree: &Tree,
+        to_right: bool,
+    ) {
+        let like = |a: &Meta, b: &Meta| a.size == b.size && (a.mtime - b.mtime).abs() <= 2;
+        let olds: Vec<(String, Meta)> = actions
+            .iter()
+            .filter(|(k, a)| **a == del && known.contains_key(*k)) // tylko pliki, które wcześniej były zsynchronizowane
+            .filter_map(|(k, _)| old_tree.get(k).map(|m| (k.clone(), *m)))
+            .collect();
+        let news: Vec<(String, Meta)> = actions
+            .iter()
+            .filter(|(k, a)| **a == copy && !old_tree.contains_key(*k))
+            .filter_map(|(k, _)| new_tree.get(k).map(|m| (k.clone(), *m)))
+            .collect();
+        for (nk, nm) in &news {
+            if nm.size == 0 {
+                continue;
+            }
+            let cands: Vec<&(String, Meta)> = olds.iter().filter(|(_, om)| like(om, nm)).collect();
+            // tylko jednoznaczne dopasowanie w obie strony
+            if cands.len() != 1 || news.iter().filter(|(_, m2)| like(m2, &cands[0].1)).count() != 1
+            {
+                continue;
+            }
+            let from = cands[0].0.clone();
+            actions.remove(&from);
+            let a = if to_right {
+                Action::RenameRight { from }
+            } else {
+                Action::RenameLeft { from }
+            };
+            actions.insert(nk.clone(), a);
+        }
+    }
+    pair(
+        actions,
+        br,
+        Action::DeleteRight,
+        Action::CopyToRight,
+        rt,
+        lt,
+        true,
+    );
+    pair(
+        actions,
+        bl,
+        Action::DeleteLeft,
+        Action::CopyToLeft,
+        lt,
+        rt,
+        false,
+    );
+}
+
+/// Przenosi plik po stronie docelowej; gdy się nie da, kopiuje nowy i usuwa stary.
+fn move_one(
+    src: &Location,
+    src_new: &Entry,
+    dst: &Location,
+    dst_old: &Entry,
+    trash: &str,
+    o: &Opts,
+) -> Result<(Meta, Meta), OpError> {
+    match dst.rename(&dst_old.real, &src_new.real) {
+        Ok(()) => Ok((
+            src_new.meta,
+            dst.stat(&src_new.real).unwrap_or(dst_old.meta),
+        )),
+        Err(_) => {
+            let r = copy_one(src, src_new, dst, None, trash, o)?;
+            dst.remove(&dst_old.real, trash)?;
+            Ok(r)
+        }
+    }
 }
 
 fn err_out(key: &str, e: OpError) -> Out {
@@ -191,6 +290,30 @@ fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
                 kind: "kopiowanie ←",
             },
             Err(e) => err_out(key, e),
+        },
+        Action::RenameRight { from } => match (c.rs.get(from), le) {
+            (Some(old), Some(new)) => match move_one(c.l, new, c.r, old, c.trash, c.o) {
+                Ok((l, r)) => Out::Moved {
+                    old: from.clone(),
+                    key: key.into(),
+                    l,
+                    r,
+                },
+                Err(e) => err_out(key, e),
+            },
+            _ => Out::Err(key.into(), "przeniesienie: brak pliku źródłowego".into()),
+        },
+        Action::RenameLeft { from } => match (c.ls.get(from), re) {
+            (Some(old), Some(new)) => match move_one(c.r, new, c.l, old, c.trash, c.o) {
+                Ok((r, l)) => Out::Moved {
+                    old: from.clone(),
+                    key: key.into(),
+                    l,
+                    r,
+                },
+                Err(e) => err_out(key, e),
+            },
+            _ => Out::Err(key.into(), "przeniesienie: brak pliku źródłowego".into()),
         },
         Action::DeleteLeft => match c.l.remove(&le.unwrap().real, c.trash) {
             Ok(()) => Out::Removed { key: key.into() },
@@ -272,7 +395,8 @@ pub fn run_job_with(
     let tree =
         |m: &BTreeMap<String, Entry>| m.iter().map(|(k, e)| (k.clone(), e.meta)).collect::<Tree>();
     let (lt, rt) = (tree(&ll.files), tree(&rl.files));
-    let actions = plan(&lt, &rt, &bl, &br, job.options());
+    let mut actions = plan(&lt, &rt, &bl, &br, job.options());
+    detect_moves(&mut actions, &lt, &rt, &bl, &br);
     rep.planned = actions
         .iter()
         .map(|(k, a)| (k.clone(), a.clone()))
@@ -298,7 +422,7 @@ pub fn run_job_with(
         String::new()
     };
     let date = now.format("%Y-%m-%d").to_string();
-    let opts = Opts::new(job.use_vss, job.verify);
+    let opts = Opts::new(job.use_vss, job.verify, &job.bandwidth, job.threads);
     let ctx = Ctx {
         l: &l,
         r: &r,
@@ -350,6 +474,18 @@ pub fn run_job_with(
                     params![job.id, key, l.size as i64, l.mtime, r.size as i64, r.mtime],
                 )?;
                 hist(kind, &key, "")?;
+            }
+            Out::Moved { old, key, l, r } => {
+                rep.moved += 1;
+                tx.execute(
+                    "DELETE FROM base WHERE job=?1 AND key=?2",
+                    params![job.id, old],
+                )?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO base(job,key,lsize,lmtime,rsize,rmtime) VALUES(?1,?2,?3,?4,?5,?6)",
+                    params![job.id, key, l.size as i64, l.mtime, r.size as i64, r.mtime],
+                )?;
+                hist("przeniesienie", &key, &format!("z: {old}"))?;
             }
             Out::Removed { key } => {
                 rep.deleted += 1;
@@ -425,7 +561,7 @@ pub fn resolve_conflict(
         (Some(a), Some(b)) => (a, b),
         _ => anyhow::bail!("plik nie istnieje już po obu stronach"),
     };
-    let opts = Opts::new(job.use_vss, job.verify);
+    let opts = Opts::new(job.use_vss, job.verify, &job.bandwidth, job.threads);
     let trash = if job.trash_days > 0 {
         chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string()
     } else {

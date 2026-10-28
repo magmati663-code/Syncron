@@ -41,6 +41,14 @@ pub enum Action {
     CopyToLeft,
     DeleteLeft,
     DeleteRight,
+    /// Plik przeniesiony/przemianowany po lewej: po prawej zmieniamy tylko ścieżkę starego pliku (`from` = klucz).
+    RenameRight {
+        from: String,
+    },
+    /// Odwrotnie: plik przeniesiony po prawej.
+    RenameLeft {
+        from: String,
+    },
     /// Konflikt: `keep_both` zachowuje obie wersje, w przeciwnym razie czeka na użytkownika.
     Conflict {
         keep_both: bool,

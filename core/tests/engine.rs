@@ -363,3 +363,90 @@ fn stale_temp_files_are_cleaned() {
         "plik tymczasowy nigdy się nie synchronizuje"
     );
 }
+
+#[test]
+fn moved_file_is_renamed_not_recopied() {
+    let (_t, l, r, s) = setup();
+    fs::create_dir_all(l.join("Stary")).unwrap();
+    fs::write(l.join("Stary/zażółć.bin"), vec![1u8; 4096]).unwrap();
+    fs::write(l.join("inny.txt"), "x").unwrap();
+    let j = job(&l, &r, "TwoWay");
+    run_job(&j, &s, false, false).unwrap();
+    #[cfg(unix)]
+    let ino = {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(r.join("Stary/zażółć.bin")).unwrap().ino()
+    };
+    fs::create_dir_all(l.join("Nowy/Podfolder")).unwrap();
+    fs::rename(
+        l.join("Stary/zażółć.bin"),
+        l.join("Nowy/Podfolder/przeniesiony.bin"),
+    )
+    .unwrap();
+    let rep = run_job(&j, &s, false, false).unwrap();
+    assert_eq!((rep.moved, rep.copied, rep.deleted), (1, 0, 0), "{rep:?}");
+    assert!(!r.join("Stary/zażółć.bin").exists());
+    assert_eq!(
+        fs::read(r.join("Nowy/Podfolder/przeniesiony.bin"))
+            .unwrap()
+            .len(),
+        4096
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            fs::metadata(r.join("Nowy/Podfolder/przeniesiony.bin"))
+                .unwrap()
+                .ino(),
+            ino,
+            "to samo i-node: przeniesienie, nie kopia"
+        );
+    }
+    assert!(run_job(&j, &s, false, false).unwrap().planned.is_empty());
+}
+
+#[test]
+fn ambiguous_move_falls_back_to_copy() {
+    let (_t, l, r, s) = setup();
+    for n in ["a.bin", "b.bin"] {
+        fs::write(l.join(n), vec![9u8; 100]).unwrap();
+        set_mtime(&l.join(n), 1_800_000_000);
+    }
+    for i in 0..12 {
+        fs::write(l.join(format!("c{i}.txt")), format!("tresc {i}")).unwrap();
+    }
+    let j = job(&l, &r, "TwoWay");
+    run_job(&j, &s, false, false).unwrap();
+    // dwa identyczne z metadanych pliki znikają i dwa takie same się pojawiają: nie zgadujemy par
+    fs::remove_file(l.join("a.bin")).unwrap();
+    fs::remove_file(l.join("b.bin")).unwrap();
+    for n in ["x.bin", "y.bin"] {
+        fs::write(l.join(n), vec![9u8; 100]).unwrap();
+        set_mtime(&l.join(n), 1_800_000_000);
+    }
+    let rep = run_job(&j, &s, false, false).unwrap();
+    assert_eq!(rep.moved, 0, "{rep:?}");
+    assert!(r.join("x.bin").exists() && r.join("y.bin").exists() && !r.join("a.bin").exists());
+}
+
+#[test]
+fn bandwidth_limit_slows_local_copy() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join("duży.bin"), vec![3u8; 300 * 1024]).unwrap();
+    let mut j = job(&l, &r, "LeftToRight");
+    j.bandwidth = syncpolak_core::model::Bandwidth {
+        kbps: 200,
+        off_kbps: 0,
+        hours: None,
+    };
+    j.threads = 1;
+    let t = std::time::Instant::now();
+    run_job(&j, &s, false, false).unwrap();
+    assert!(
+        t.elapsed().as_secs_f64() >= 1.2,
+        "300 KB przy 200 KB/s powinno trwać ok. 1,5 s, trwało {:?}",
+        t.elapsed()
+    );
+    assert_eq!(fs::read(r.join("duży.bin")).unwrap().len(), 300 * 1024);
+}

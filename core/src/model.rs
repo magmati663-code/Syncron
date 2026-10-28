@@ -45,6 +45,74 @@ pub struct Conditions {
     pub wifi: Vec<String>,
 }
 
+/// Limit prędkości transferu (KB/s; 0 = bez limitu).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Bandwidth {
+    /// Limit w godzinach `hours` (albo zawsze, gdy `hours` puste).
+    #[serde(default)]
+    pub kbps: u32,
+    /// Limit poza godzinami `hours` (0 = bez limitu).
+    #[serde(default)]
+    pub off_kbps: u32,
+    /// Godziny [od, do), w których obowiązuje `kbps`.
+    #[serde(default)]
+    pub hours: Option<[u32; 2]>,
+}
+
+impl Bandwidth {
+    /// Limit obowiązujący teraz (KB/s, 0 = bez limitu).
+    pub fn current_kbps(&self) -> u32 {
+        use chrono::Timelike;
+        match self.hours {
+            None => self.kbps,
+            Some([a, b]) => {
+                let h = chrono::Local::now().hour();
+                let inside = if a <= b {
+                    h >= a && h < b
+                } else {
+                    h >= a || h < b
+                };
+                if inside {
+                    self.kbps
+                } else {
+                    self.off_kbps
+                }
+            }
+        }
+    }
+
+    /// Limit rozłożony na `n` równoległych transferów (każdy proces/wątek dostaje swoją część).
+    pub fn split(&self, n: u32) -> Bandwidth {
+        let n = n.max(1);
+        let f = |k: u32| if k == 0 { 0 } else { (k / n).max(1) };
+        Bandwidth {
+            kbps: f(self.kbps),
+            off_kbps: f(self.off_kbps),
+            hours: self.hours,
+        }
+    }
+
+    /// Wartość dla `rclone --bwlimit` (np. `512k` albo rozkład godzinowy `08:00,512k 18:00,off`).
+    pub fn rclone_arg(&self) -> Option<String> {
+        let k = |v: u32| {
+            if v == 0 {
+                "off".to_string()
+            } else {
+                format!("{v}k")
+            }
+        };
+        match self.hours {
+            _ if self.kbps == 0 && self.off_kbps == 0 => None,
+            None => (self.kbps > 0).then(|| k(self.kbps)),
+            Some([a, b]) => Some(format!(
+                "{a:02}:00,{} {b:02}:00,{}",
+                k(self.kbps),
+                k(self.off_kbps)
+            )),
+        }
+    }
+}
+
 /// Dodatkowe wyzwalacze uruchamiania (poza harmonogramem).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Triggers {
@@ -108,6 +176,8 @@ pub struct Job {
     #[serde(default)]
     pub conditions: Conditions,
     #[serde(default)]
+    pub bandwidth: Bandwidth,
+    #[serde(default)]
     pub triggers: Triggers,
 }
 
@@ -152,6 +222,36 @@ impl Job {
 mod tests {
     use super::*;
     use crate::rules::FileInfo;
+
+    #[test]
+    fn bandwidth_math() {
+        let b = Bandwidth {
+            kbps: 800,
+            off_kbps: 0,
+            hours: Some([8, 18]),
+        };
+        assert_eq!(b.rclone_arg().unwrap(), "08:00,800k 18:00,off");
+        assert_eq!(
+            Bandwidth {
+                kbps: 500,
+                ..Default::default()
+            }
+            .rclone_arg()
+            .unwrap(),
+            "500k"
+        );
+        assert!(Bandwidth::default().rclone_arg().is_none());
+        assert_eq!(b.split(4).kbps, 200);
+        assert_eq!(
+            Bandwidth {
+                kbps: 3,
+                ..Default::default()
+            }
+            .split(4)
+            .kbps,
+            1
+        );
+    }
 
     #[test]
     fn size_rules() {

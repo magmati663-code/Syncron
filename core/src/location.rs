@@ -1,4 +1,5 @@
 //! Lokalizacje: folder lokalny/UNC albo zdalny (rclone). Listowanie i operacje na plikach.
+use crate::model::Bandwidth;
 use crate::names;
 use crate::plan::Meta;
 use crate::rules::{FileInfo, RuleSet};
@@ -67,13 +68,16 @@ pub struct Opts {
     pub vss: Vss,
     /// Po zapisie porównaj sumę kontrolną BLAKE3 źródła i pliku docelowego.
     pub verify: bool,
+    /// Limit prędkości przypadający na jeden transfer.
+    pub bw: Bandwidth,
 }
 
 impl Opts {
-    pub fn new(use_vss: bool, verify: bool) -> Self {
+    pub fn new(use_vss: bool, verify: bool, bw: &Bandwidth, threads: usize) -> Self {
         Opts {
             vss: Vss::new(use_vss),
             verify,
+            bw: bw.split(threads as u32),
         }
     }
 }
@@ -178,12 +182,12 @@ impl Location {
                     if delay > 0 {
                         sleep(Duration::from_millis(delay));
                     }
-                    match copy_local(&src, &dst, o.verify) {
+                    match copy_local(&src, &dst, o.verify, &o.bw) {
                         Ok(()) => return Ok(()),
                         Err(e) if is_busy(&e) => {
                             // plik zablokowany przez inny program: odczyt z migawki VSS (Windows, administrator)
                             if let Ok(snap) = o.vss.snapshot_path(&src) {
-                                match copy_local(&snap, &dst, o.verify) {
+                                match copy_local(&snap, &dst, o.verify, &o.bw) {
                                     Ok(()) => return Ok(()),
                                     Err(e2) => last = Some(e2),
                                 }
@@ -223,18 +227,39 @@ impl Location {
                                 std::process::id(),
                                 N.fetch_add(1, Ordering::SeqCst)
                             ));
-                            copy_local(&snap, &t, false)?;
+                            copy_local(&snap, &t, false, &Bandwidth::default())?;
                             source = t.to_string_lossy().into_owned();
                             temp = Some(t);
                         }
                     }
                 }
-                let res = rclone_op(&["copyto", &source, &self.full(to_rel)]);
+                let bw = o.bw.rclone_arg();
+                let mut args = vec!["copyto", source.as_str(), ""];
+                let dest = self.full(to_rel);
+                args[2] = dest.as_str();
+                if let Some(b) = &bw {
+                    args.extend(["--bwlimit", b.as_str()]);
+                }
+                let res = rclone_op(&args);
                 if let Some(t) = temp {
                     let _ = fs::remove_file(t);
                 }
                 res
             }
+        }
+    }
+
+    /// Zmienia ścieżkę pliku w obrębie tej lokalizacji (przeniesienie bez ponownego kopiowania).
+    pub fn rename(&self, from_rel: &str, to_rel: &str) -> Result<(), OpError> {
+        match self {
+            Location::Local(p) => {
+                let dst = local_full(p, to_rel);
+                if let Some(parent) = dst.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                Ok(fs::rename(local_full(p, from_rel), dst)?)
+            }
+            Location::Rclone(_) => rclone_op(&["moveto", &self.full(from_rel), &self.full(to_rel)]),
         }
     }
 
@@ -585,7 +610,7 @@ fn open_shared(p: &Path) -> io::Result<File> {
     o.open(p)
 }
 
-fn copy_local(src: &Path, dst: &Path, verify: bool) -> io::Result<()> {
+fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -599,15 +624,28 @@ fn copy_local(src: &Path, dst: &Path, verify: bool) -> io::Result<()> {
     let res = (|| {
         let mut out = File::create(&tmp)?;
         let mut hasher = blake3::Hasher::new();
-        if verify {
-            let mut buf = vec![0u8; 1 << 20];
+        if verify || bw.current_kbps() > 0 || bw.hours.is_some() {
+            let mut buf = vec![0u8; 256 * 1024];
+            let started = std::time::Instant::now();
+            let mut sent: u64 = 0;
             loop {
                 let n = io::Read::read(&mut inp, &mut buf)?;
                 if n == 0 {
                     break;
                 }
-                hasher.update(&buf[..n]);
+                if verify {
+                    hasher.update(&buf[..n]);
+                }
                 io::Write::write_all(&mut out, &buf[..n])?;
+                sent += n as u64;
+                let kbps = bw.current_kbps();
+                if kbps > 0 {
+                    // ogranicznik: czekamy tyle, ile powinno trwać wysłanie dotychczasowych bajtów
+                    let due = Duration::from_secs_f64(sent as f64 / (kbps as f64 * 1024.0));
+                    if let Some(wait) = due.checked_sub(started.elapsed()) {
+                        sleep(wait);
+                    }
+                }
             }
         } else {
             io::copy(&mut inp, &mut out)?;
