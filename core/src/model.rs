@@ -262,6 +262,13 @@ impl Job {
         if self.name.trim().is_empty() {
             return Err("Podaj nazwę zadania.".into());
         }
+        self.validate_locations()?;
+        self.validate_rest()
+    }
+
+    /// Sprawdza tylko lokalizacje: niepuste, różne i niezagnieżdżone. Używane też przed każdym uruchomieniem,
+    /// żeby stare (zapisane przed walidacją) zadania nie kopiowały folderu w siebie.
+    pub fn validate_locations(&self) -> Result<(), String> {
         if self.left.trim().is_empty() || self.right.trim().is_empty() {
             return Err("Podaj obie lokalizacje (lewą i prawą).".into());
         }
@@ -279,6 +286,10 @@ impl Job {
         if is_prefix(&r, &l) {
             return Err("Lewa lokalizacja leży wewnątrz prawej — każde uruchomienie kopiowałoby folder w siebie. Wybierz rozłączne foldery.".into());
         }
+        Ok(())
+    }
+
+    fn validate_rest(&self) -> Result<(), String> {
         match &self.schedule {
             Schedule::Manual => {}
             Schedule::Realtime { poll_secs } if *poll_secs < 1 => {

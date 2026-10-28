@@ -64,7 +64,7 @@ fn delete_is_skipped_when_file_still_exists_on_other_side() {
     let rep = run_job(&j, &s, false, true).unwrap();
     assert!(r.join("a.txt").exists());
     assert!(
-        rep.errors.iter().any(|e| e.contains("ostrzeżenie")),
+        rep.warnings.iter().any(|e| e.contains("ostrzeżenie")),
         "{rep:?}"
     );
 }

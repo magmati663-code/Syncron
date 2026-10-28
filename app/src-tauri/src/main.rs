@@ -252,7 +252,10 @@ fn list_jobs(r: State<Runner>) -> Vec<Job> {
 
 #[tauri::command]
 fn save_job(r: State<Runner>, job: Job) -> Res<()> {
-    job.validate()?;
+    // wyłączenie starego, nieprawidłowego zadania musi być możliwe; pełna walidacja dotyczy włączonych
+    if job.enabled {
+        job.validate()?;
+    }
     r.update_jobs(|mut jobs| {
         match jobs.iter().position(|j| j.id == job.id) {
             Some(i) => {

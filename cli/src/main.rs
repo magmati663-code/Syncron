@@ -510,6 +510,10 @@ fn real_main() -> Result<ExitCode, String> {
                     }
                 }
             }
+            for (n, j) in incoming.iter().enumerate() {
+                j.validate()
+                    .map_err(|e| format!("zadanie nr {} w pliku {f}: {e}", n + 1))?;
+            }
             let mut ids: Vec<&str> = incoming.iter().map(|j| j.id.as_str()).collect();
             ids.sort_unstable();
             ids.dedup();

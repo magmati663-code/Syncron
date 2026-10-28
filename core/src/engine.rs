@@ -26,6 +26,9 @@ pub struct Report {
     /// Pliki zajęte przez inne programy: zostaną ponowione.
     pub busy: Vec<String>,
     pub errors: Vec<String>,
+    /// Ostrzeżenia (np. pominięte usunięcie): nie są błędami, więc nie wymuszają ponowień.
+    #[serde(default)]
+    pub warnings: Vec<String>,
     /// Plan działań (wypełniany w trybie symulacji i po wykonaniu).
     pub planned: Vec<(String, Action)>,
     /// Powód zatrzymania przez zabezpieczenia.
@@ -492,6 +495,7 @@ pub fn run_job_with(
     force: bool,
     progress: Option<ProgressFn>,
 ) -> anyhow::Result<Report> {
+    job.validate_locations().map_err(|e| anyhow::anyhow!(e))?;
     let mut rep = Report {
         started: chrono::Local::now().timestamp(),
         dry_run: dry,
@@ -657,7 +661,7 @@ pub fn run_job_with(
             }
             Out::Warn(p, m) => {
                 hist("ostrzeżenie", &p, &m)?;
-                rep.errors.push(m);
+                rep.warnings.push(m);
             }
             Out::Busy(p, m) => {
                 hist("zajęty", &p, &m)?;

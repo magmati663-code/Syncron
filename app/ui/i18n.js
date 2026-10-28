@@ -148,7 +148,7 @@
     [/^Czeka na warunki:$/, "Waiting for conditions:"], [/^Zatrzymano ze względów bezpieczeństwa:$/, "Stopped for safety reasons:"],
     [/^Symulacja: (.+)$/, "Simulation: $1", true], [/^Przeskanowano:$/, "Scanned:"], [/^(\d+) \/ (\d+)$/, "$1 / $2"],
     [/^plików po lewej i$/, "files on the left and"], [/^po prawej\. Planowanych działań:$/, "on the right. Planned actions:"],
-    [/^Krok (\d) z (\d)/, "Step $1 of $2"], [/^Wyeksportowano zadań: (\d+)$/, "Exported jobs: $1"], [/^Zaimportowano zadań: (\d+)$/, "Imported jobs: $1"],
+    [/^Krok (\d) z (\d)/, "Step $1 of $2"], [/^Wyeksportowano zadań: (\d+)$/, "Exported jobs: $1"], [/^Zaimportowano zadań: (\d+)( \(wyłączone — włącz je po sprawdzeniu\))?$/, (m, n, d) => "Imported jobs: " + n + (d ? " (disabled — enable them after checking)" : "")],
     [/^Przywrócono jako: (.+)$/, "Restored as: $1", true], [/^Dostępna wersja (.+)$/, "Version $1 available"], [/^Dostępna aktualizacja (.+)$/, "Update $1 available"],
     [/^(\d+) wersji\)?$/, "$1 versions"], [/^\((\d+) wersji\)$/, "($1 versions)"],
     [/^Wersja pliku „(.+)” zostanie usunięta bez możliwości przywrócenia\.$/, "The version of “$1” will be deleted permanently.", true],

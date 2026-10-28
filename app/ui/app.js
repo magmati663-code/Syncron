@@ -277,6 +277,7 @@ function showReport(title, r) {
   $("#repBody").innerHTML = `<p>Przeskanowano: <b>${r.scanned_left}</b> plików po lewej i <b>${r.scanned_right}</b> po prawej. Planowanych działań: <b>${r.planned.length}</b>. <span class="muted">Nic nie zostało zmienione.</span></p>` +
     (r.blocked ? `<div class="msg warn"><b>Zabezpieczenie zatrzymałoby synchronizację:</b> <span data-nt>${esc(r.blocked)}</span></div>` : "") +
     (r.errors.length ? `<div class="msg" data-nt>${r.errors.map(esc).join("<br>")}</div>` : "") +
+    ((r.warnings || []).length ? `<div class="msg warn" data-nt>${r.warnings.map(esc).join("<br>")}</div>` : "") +
     (rows ? `<div class="scroll" style="margin-top:12px">${treeHtml}</div>` : '<p class="muted">Obie strony są zgodne — nic do zrobienia.</p>');
   $("#report").showModal();
 }
