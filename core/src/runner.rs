@@ -290,7 +290,7 @@ fn touches_volume(job: &Job, vol: &str) -> bool {
 
 fn relevant(p: &Path) -> bool {
     let s = p.to_string_lossy();
-    if s.contains(TRASH_DIR) || s.contains(".syncpolak") {
+    if s.contains(TRASH_DIR) || s.contains(".syncron") || s.contains(".syncpolak") {
         return false;
     }
     !p.file_name()

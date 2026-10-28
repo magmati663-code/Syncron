@@ -2,8 +2,8 @@
 //! Pomijany, gdy rclone nie jest zainstalowany (w CI jest instalowany).
 use std::fs;
 use std::process::Command;
-use syncpolak_core::engine::{run_job, trash_list};
-use syncpolak_core::model::Job;
+use syncron_core::engine::{run_job, trash_list};
+use syncron_core::model::Job;
 
 fn rclone_ok() -> bool {
     Command::new("rclone")

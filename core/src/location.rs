@@ -13,7 +13,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const TRASH_DIR: &str = ".syncpolak-trash";
+pub const TRASH_DIR: &str = ".syncron-trash";
+/// Nazwy z czasów, gdy aplikacja nazywała się SyncPolak: nadal pomijane przy listowaniu.
+pub const LEGACY_TRASH_DIR: &str = ".syncpolak-trash";
+pub const LEGACY_TMP_SUFFIX: &str = ".syncpolak.tmp";
 
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -222,7 +225,7 @@ impl Location {
                                 .snapshot_path(&src)
                                 .map_err(|n| OpError::Busy(format!("{e}; {n}")))?;
                             static N: AtomicUsize = AtomicUsize::new(0);
-                            let t = std::env::temp_dir().join("syncpolak-vss").join(format!(
+                            let t = std::env::temp_dir().join("syncron-vss").join(format!(
                                 "{}-{}",
                                 std::process::id(),
                                 N.fetch_add(1, Ordering::SeqCst)
@@ -430,7 +433,10 @@ impl Location {
                     .flatten()
                 {
                     let n = e.file_name().to_string_lossy().into_owned();
-                    if n != TRASH_DIR && e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    if n != TRASH_DIR
+                        && n != LEGACY_TRASH_DIR
+                        && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    {
                         out.push(n);
                     }
                 }
@@ -568,7 +574,7 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
         for ent in rd {
             let ent = ent.map_err(|e| format!("{}: {e}", dir.display()))?;
             let name = ent.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".syncpolak.tmp") {
+            if name.ends_with(".syncron.tmp") || name.ends_with(LEGACY_TMP_SUFFIX) {
                 // pozostałość po przerwanym kopiowaniu (zerwane połączenie, restart): sprzątamy, gdy jest stara
                 if let Ok(age) = ent
                     .metadata()
@@ -581,7 +587,7 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
                 }
                 continue;
             }
-            if name == TRASH_DIR || names::is_temp(&name) {
+            if name == TRASH_DIR || name == LEGACY_TRASH_DIR || names::is_temp(&name) {
                 continue;
             }
             let ft = ent.file_type().map_err(|e| format!("{name}: {e}"))?;
@@ -626,7 +632,7 @@ fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Resul
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dst.with_file_name(format!("{fname}.syncpolak.tmp"));
+    let tmp = dst.with_file_name(format!("{fname}.syncron.tmp"));
     let mut inp = open_shared(src)?;
     let before = inp.metadata()?;
     let res = (|| {
@@ -692,7 +698,7 @@ fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Resul
 // ---------- rclone ----------
 
 fn rclone_bin() -> String {
-    std::env::var("SYNCPOLAK_RCLONE").unwrap_or_else(|_| "rclone".into())
+    std::env::var("SYNCRON_RCLONE").unwrap_or_else(|_| "rclone".into())
 }
 
 pub fn run_rclone(args: &[&str]) -> Result<String, String> {
@@ -740,7 +746,11 @@ fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, Stri
         }
         let path = it["Path"].as_str().unwrap_or("").to_string();
         let name = path.rsplit('/').next().unwrap_or("");
-        if skip_special && (path.starts_with(TRASH_DIR) || names::is_temp(name)) {
+        if skip_special
+            && (path.starts_with(TRASH_DIR)
+                || path.starts_with(LEGACY_TRASH_DIR)
+                || names::is_temp(name))
+        {
             continue;
         }
         let mtime = it["ModTime"]

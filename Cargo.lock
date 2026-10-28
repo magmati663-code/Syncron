@@ -3852,15 +3852,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "syncpolak-app"
-version = "0.6.0"
+name = "syncron-app"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "log",
  "serde",
  "serde_json",
- "syncpolak-core",
+ "syncron-core",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -3872,19 +3872,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "syncpolak-cli"
-version = "0.6.0"
+name = "syncron-cli"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "log",
  "serde_json",
- "syncpolak-core",
+ "syncron-core",
  "tempfile",
 ]
 
 [[package]]
-name = "syncpolak-core"
-version = "0.6.0"
+name = "syncron-core"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "blake3",

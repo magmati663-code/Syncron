@@ -367,7 +367,7 @@ $("#histQ").oninput = renderHistory;
 $("#exportCsv").onclick = () => {
   const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const csv = "﻿" + ["czas;zadanie;operacja;plik;szczegóły", ...lastHist.map((h) => [fmtTime(h.ts), jobs.find((j) => j.id === h.job)?.name || h.job, h.kind, h.path, h.detail].map(q).join(";"))].join("\r\n");
-  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); a.download = "syncpolak-historia.csv"; a.click();
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); a.download = "syncron-historia.csv"; a.click();
 };
 
 // ---------- konta ----------
@@ -560,7 +560,7 @@ async function checkUpdates(silent) {
 $("#checkUpd").onclick = () => checkUpdates(false);
 setTimeout(() => checkUpdates(true), 8000);
 $("#cfgExport").onclick = async () => {
-  try { const p = await dialogApi.save({ defaultPath: "syncpolak-konfiguracja.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (p) toast(`Wyeksportowano zadań: ${await invoke("export_config", { path: p })}`, "ok"); } catch (e) { toast(String(e), "bad"); }
+  try { const p = await dialogApi.save({ defaultPath: "syncron-konfiguracja.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (p) toast(`Wyeksportowano zadań: ${await invoke("export_config", { path: p })}`, "ok"); } catch (e) { toast(String(e), "bad"); }
 };
 $("#cfgImport").onclick = async () => {
   try { const p = await dialogApi.open({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] }); if (p) { toast(`Zaimportowano zadań: ${await invoke("import_config", { path: p })}`, "ok"); await refreshJobs(); } } catch (e) { toast(String(e), "bad"); }

@@ -3,8 +3,8 @@
 #![cfg(windows)]
 use std::fs::{self, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
-use syncpolak_core::engine::run_job;
-use syncpolak_core::model::Job;
+use syncron_core::engine::run_job;
+use syncron_core::model::Job;
 
 fn job(l: &std::path::Path, r: &std::path::Path, vss: bool) -> Job {
     serde_json::from_value(serde_json::json!({
@@ -16,7 +16,7 @@ fn job(l: &std::path::Path, r: &std::path::Path, vss: bool) -> Job {
 
 #[test]
 fn locked_file_is_copied_from_vss_snapshot() {
-    if !syncpolak_core::vss::is_admin() {
+    if !syncron_core::vss::is_admin() {
         eprintln!("pominięto: test VSS wymaga uprawnień administratora");
         return;
     }

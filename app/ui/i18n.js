@@ -201,5 +201,5 @@
     }).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title"] });
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
-  document.title = "SyncPolak";
+  document.title = "Syncron";
 })();

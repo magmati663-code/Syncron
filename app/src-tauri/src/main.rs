@@ -2,11 +2,11 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use syncpolak_core::engine::{self, HistoryRow, Report, TrashItem};
-use syncpolak_core::location::run_rclone;
-use syncpolak_core::model::Job;
-use syncpolak_core::runner::{Runner, Status};
-use syncpolak_core::vss;
+use syncron_core::engine::{self, HistoryRow, Report, TrashItem};
+use syncron_core::location::run_rclone;
+use syncron_core::model::Job;
+use syncron_core::runner::{Runner, Status};
+use syncron_core::vss;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State, WindowEvent};
@@ -14,7 +14,7 @@ use tauri_plugin_autostart::MacosLauncher;
 
 type Res<T> = Result<T, String>;
 
-/// Prosty dziennik plikowy z rotacją (2 MB, 3 kopie): `logs/syncpolak.log` w folderze danych aplikacji.
+/// Prosty dziennik plikowy z rotacją (2 MB, 3 kopie): `logs/syncron.log` w folderze danych aplikacji.
 struct FileLogger {
     path: std::path::PathBuf,
     lock: std::sync::Mutex<()>,
@@ -69,7 +69,7 @@ fn init_logging(dir: &std::path::Path) {
     let logs = dir.join("logs");
     let _ = std::fs::create_dir_all(&logs);
     let logger = FileLogger {
-        path: logs.join("syncpolak.log"),
+        path: logs.join("syncron.log"),
         lock: std::sync::Mutex::new(()),
     };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
@@ -77,7 +77,7 @@ fn init_logging(dir: &std::path::Path) {
     }
     std::panic::set_hook(Box::new(|info| log::error!("PANIC: {info}")));
     log::info!(
-        "SyncPolak {} uruchomiony ({} {})",
+        "Syncron {} uruchomiony ({} {})",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH
@@ -129,11 +129,11 @@ fn overall_state(r: &Runner) -> (&'static str, [u8; 3]) {
 }
 
 fn kind_of(loc: &str) -> String {
-    match syncpolak_core::location::Location::parse(loc) {
-        syncpolak_core::location::Location::Rclone(s) => {
+    match syncron_core::location::Location::parse(loc) {
+        syncron_core::location::Location::Rclone(s) => {
             format!("chmura ({})", s.split(':').next().unwrap_or(""))
         }
-        syncpolak_core::location::Location::Local(_)
+        syncron_core::location::Location::Local(_)
             if loc.starts_with("\\\\") || loc.starts_with("//") =>
         {
             "dysk sieciowy".into()
@@ -148,7 +148,7 @@ async fn get_diagnostics(r: State<'_, Runner>) -> Res<String> {
     let runner = r.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut o = String::new();
-        o += &format!("SyncPolak {}\nSystem: {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+        o += &format!("Syncron {}\nSystem: {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
         o += &format!("rclone: {}\n", run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string()).unwrap_or_else(|e| format!("niedostępny ({e})")));
         o += &format!("VSS: obsługa={}, administrator={}\n", vss::supported(), vss::is_admin());
         let st = runner.status();
@@ -168,7 +168,7 @@ async fn get_diagnostics(r: State<'_, Runner>) -> Res<String> {
                     l.vss_note.as_ref().map(|n| format!(", VSS: {n}")).unwrap_or_default());
             }
         }
-        let log = std::fs::read_to_string(runner.state_dir().join("logs").join("syncpolak.log")).unwrap_or_default();
+        let log = std::fs::read_to_string(runner.state_dir().join("logs").join("syncron.log")).unwrap_or_default();
         let tail: Vec<&str> = log.lines().rev().take(200).collect();
         o += "\nOstatnie wpisy dziennika:\n";
         o += &tail.into_iter().rev().collect::<Vec<_>>().join("\n");
@@ -288,8 +288,8 @@ async fn resolve_conflict(
 /// Podpowiedź przy wpisywaniu ścieżki: czy folder lokalny istnieje (dyski sieciowe mogą być chwilowo niedostępne).
 #[tauri::command]
 fn check_path(path: String) -> Option<String> {
-    match syncpolak_core::location::Location::parse(&path) {
-        syncpolak_core::location::Location::Local(p) if !p.as_os_str().is_empty() && !p.is_dir() => {
+    match syncron_core::location::Location::parse(&path) {
+        syncron_core::location::Location::Local(p) if !p.as_os_str().is_empty() && !p.is_dir() => {
             Some("Ten folder nie jest teraz dostępny. Jeśli to dysk sieciowy, upewnij się, że jest podłączony.".into())
         }
         _ => None,
@@ -606,7 +606,7 @@ fn export_config(r: State<Runner>, path: String) -> Res<usize> {
 fn import_config(r: State<Runner>, path: String) -> Res<usize> {
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let incoming: Vec<Job> = serde_json::from_str(&text)
-        .map_err(|e| format!("to nie jest plik konfiguracji SyncPolak: {e}"))?;
+        .map_err(|e| format!("to nie jest plik konfiguracji Syncron: {e}"))?;
     let mut jobs = r.load_jobs();
     for j in &incoming {
         match jobs.iter().position(|x| x.id == j.id) {
@@ -643,16 +643,16 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon) {
                     let _ = tray.set_icon(Some(badge_icon(base, color)));
                 }
                 let tip = match (state, en) {
-                    ("paused", false) => "SyncPolak — wstrzymane",
-                    ("error", false) => "SyncPolak — błąd lub zatrzymanie",
-                    ("attention", false) => "SyncPolak — coś wymaga uwagi",
-                    ("running", false) => "SyncPolak — synchronizuję",
-                    (_, false) => "SyncPolak — wszystko w porządku",
-                    ("paused", true) => "SyncPolak — paused",
-                    ("error", true) => "SyncPolak — error or stopped",
-                    ("attention", true) => "SyncPolak — needs attention",
-                    ("running", true) => "SyncPolak — syncing",
-                    _ => "SyncPolak — all good",
+                    ("paused", false) => "Syncron — wstrzymane",
+                    ("error", false) => "Syncron — błąd lub zatrzymanie",
+                    ("attention", false) => "Syncron — coś wymaga uwagi",
+                    ("running", false) => "Syncron — synchronizuję",
+                    (_, false) => "Syncron — wszystko w porządku",
+                    ("paused", true) => "Syncron — paused",
+                    ("error", true) => "Syncron — error or stopped",
+                    ("attention", true) => "Syncron — needs attention",
+                    ("running", true) => "Syncron — syncing",
+                    _ => "Syncron — all good",
                 };
                 let _ = tray.set_tooltip(Some(tip));
             }
@@ -667,7 +667,7 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon) {
                     let _ = app
                         .notification()
                         .builder()
-                        .title(format!("SyncPolak — {name}"))
+                        .title(format!("Syncron — {name}"))
                         .body(body)
                         .show();
                 };
@@ -739,7 +739,7 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon) {
                     let _ = app
                         .notification()
                         .builder()
-                        .title(format!("SyncPolak — {name}"))
+                        .title(format!("Syncron — {name}"))
                         .body(body)
                         .show();
                 }
@@ -762,7 +762,7 @@ fn locate_rclone(app: &tauri::AppHandle) {
     if let Ok(dir) = app.path().resource_dir() {
         for p in [dir.join("bin").join(exe), dir.join(exe)] {
             if p.is_file() {
-                std::env::set_var("SYNCPOLAK_RCLONE", &p);
+                std::env::set_var("SYNCRON_RCLONE", &p);
                 break;
             }
         }
@@ -793,6 +793,7 @@ fn main() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            syncron_core::legacy::migrate_data_dir(&dir); // dane z czasów SyncPolak
             init_logging(&dir);
             // własna konfiguracja rclone w folderze danych aplikacji
             std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
@@ -803,7 +804,7 @@ fn main() {
             runner.start_monitor(); // dysk podłączony / wybudzenie / zmiana sieci
             app.manage(runner);
 
-            let show = MenuItem::with_id(app, "show", "Otwórz SyncPolak", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Otwórz Syncron", true, None::<&str>)?;
             let pause = MenuItem::with_id(
                 app,
                 "pause",
@@ -815,7 +816,7 @@ fn main() {
             let menu = Menu::with_items(app, &[&show, &pause, &quit])?;
             let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("SyncPolak")
+                .tooltip("Syncron")
                 .menu(&menu)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "show" => show_main(app),
@@ -882,5 +883,5 @@ fn main() {
             set_elevated_autostart
         ])
         .run(tauri::generate_context!())
-        .expect("błąd uruchamiania SyncPolak");
+        .expect("błąd uruchamiania Syncron");
 }

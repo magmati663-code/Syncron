@@ -36,9 +36,15 @@ pub fn is_temp(name: &str) -> bool {
     let l = name.to_lowercase();
     name.starts_with("~$")
         || name.starts_with(".~lock.")
-        || [".tmp", ".crdownload", ".part", ".syncpolak.tmp"]
-            .iter()
-            .any(|e| l.ends_with(e))
+        || [
+            ".tmp",
+            ".crdownload",
+            ".part",
+            ".syncron.tmp",
+            ".syncpolak.tmp",
+        ]
+        .iter()
+        .any(|e| l.ends_with(e))
         || matches!(l.as_str(), ".ds_store" | "thumbs.db" | "desktop.ini")
 }
 

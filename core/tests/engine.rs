@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
-use syncpolak_core::engine::run_job;
-use syncpolak_core::model::Job;
+use syncron_core::engine::run_job;
+use syncron_core::model::Job;
 
 fn job(l: &Path, r: &Path, mode: &str) -> Job {
     serde_json::from_value(serde_json::json!({
@@ -82,7 +82,7 @@ fn modify_and_delete_propagate_with_trash() {
     assert_eq!(fs::read_to_string(l.join("a.txt")).unwrap(), "zmienione");
     assert!(!r.join("b.txt").exists());
     // usunięty plik trafił do kosza
-    let trash = r.join(".syncpolak-trash");
+    let trash = r.join(".syncron-trash");
     assert!(fs::read_dir(trash).unwrap().next().is_some());
 }
 
@@ -148,7 +148,7 @@ fn conflict_keep_both() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "0").unwrap();
     let mut j = job(&l, &r, "TwoWay");
-    j.conflict = syncpolak_core::plan::Conflict::KeepBoth;
+    j.conflict = syncron_core::plan::Conflict::KeepBoth;
     run_job(&j, &s, false, false).unwrap();
     fs::write(l.join("a.txt"), "lewy").unwrap();
     set_mtime(&l.join("a.txt"), 1_900_000_000);
@@ -181,7 +181,7 @@ fn resolve_conflict_manually() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "0").unwrap();
     let mut j = job(&l, &r, "TwoWay");
-    j.conflict = syncpolak_core::plan::Conflict::Ask;
+    j.conflict = syncron_core::plan::Conflict::Ask;
     run_job(&j, &s, false, false).unwrap();
     fs::write(l.join("a.txt"), "lewy").unwrap();
     set_mtime(&l.join("a.txt"), 1_900_000_000);
@@ -189,7 +189,7 @@ fn resolve_conflict_manually() {
     set_mtime(&r.join("a.txt"), 1_900_000_100);
     let rep = run_job(&j, &s, false, false).unwrap();
     assert_eq!(rep.conflicts.len(), 1);
-    syncpolak_core::engine::resolve_conflict(&j, &s, "a.txt", false).unwrap();
+    syncron_core::engine::resolve_conflict(&j, &s, "a.txt", false).unwrap();
     assert_eq!(fs::read_to_string(l.join("a.txt")).unwrap(), "prawy!");
     let rep = run_job(&j, &s, false, false).unwrap();
     assert!(
@@ -209,7 +209,7 @@ fn progress_is_reported() {
         assert_eq!(t, 5);
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     };
-    syncpolak_core::engine::run_job_with(&job(&l, &r, "TwoWay"), &s, false, false, Some(&cb))
+    syncron_core::engine::run_job_with(&job(&l, &r, "TwoWay"), &s, false, false, Some(&cb))
         .unwrap();
     assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 5);
 }
@@ -224,7 +224,7 @@ fn overwritten_file_is_backed_up_to_trash() {
     set_mtime(&l.join("a.txt"), 2_000_000_000);
     run_job(&j, &s, false, false).unwrap();
     assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "nowa wersja");
-    let day = fs::read_dir(r.join(".syncpolak-trash"))
+    let day = fs::read_dir(r.join(".syncron-trash"))
         .unwrap()
         .next()
         .unwrap()
@@ -235,7 +235,7 @@ fn overwritten_file_is_backed_up_to_trash() {
 
 #[test]
 fn trash_list_restore_and_delete() {
-    use syncpolak_core::engine::{trash_delete, trash_list, trash_restore};
+    use syncron_core::engine::{trash_delete, trash_list, trash_restore};
     let (_t, l, r, s) = setup();
     fs::create_dir_all(l.join("Zażółć")).unwrap();
     fs::write(l.join("Zażółć/a.txt"), "v1").unwrap();
@@ -269,14 +269,14 @@ fn trash_can_be_disabled() {
     set_mtime(&l.join("a.txt"), 2_000_000_000);
     run_job(&j, &s, false, false).unwrap();
     assert!(
-        !r.join(".syncpolak-trash").exists(),
+        !r.join(".syncron-trash").exists(),
         "przy wyłączonym koszu nic nie jest odkładane"
     );
 }
 
 #[test]
 fn versions_are_capped() {
-    use syncpolak_core::location::Location;
+    use syncron_core::location::Location;
     let (_t, l, r, _s) = setup();
     let loc = Location::parse(r.to_str().unwrap());
     for (i, stamp) in [
@@ -287,7 +287,7 @@ fn versions_are_capped() {
     .iter()
     .enumerate()
     {
-        let d = r.join(".syncpolak-trash").join(stamp);
+        let d = r.join(".syncron-trash").join(stamp);
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("a.txt"), format!("v{i}")).unwrap();
     }
@@ -308,7 +308,7 @@ fn verify_checksum_and_list_dirs() {
     let rep = run_job(&j, &s, false, false).unwrap();
     assert_eq!(rep.copied, 1, "{rep:?}");
     assert_eq!(fs::read(r.join("Łódź/duży.bin")).unwrap().len(), 3_000_000);
-    let dirs = syncpolak_core::engine::list_dirs(l.to_str().unwrap(), "").unwrap();
+    let dirs = syncron_core::engine::list_dirs(l.to_str().unwrap(), "").unwrap();
     assert_eq!(dirs, vec!["Archiwum", "Łódź"]);
 }
 
@@ -350,8 +350,8 @@ fn unavailable_target_is_safe_and_recovers() {
 fn stale_temp_files_are_cleaned() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "x").unwrap();
-    let old = r.join("duży.bin.syncpolak.tmp");
-    let fresh = r.join("trwa.bin.syncpolak.tmp");
+    let old = r.join("duży.bin.syncron.tmp");
+    let fresh = r.join("trwa.bin.syncron.tmp");
     fs::write(&old, "ucięty").unwrap();
     fs::write(&fresh, "w toku").unwrap();
     set_mtime(&old, 1_000_000_000);
@@ -359,7 +359,7 @@ fn stale_temp_files_are_cleaned() {
     assert!(!old.exists(), "stary plik tymczasowy powinien zniknąć");
     assert!(fresh.exists(), "świeży (trwające kopiowanie) zostaje");
     assert!(
-        !l.join("duży.bin.syncpolak.tmp").exists(),
+        !l.join("duży.bin.syncron.tmp").exists(),
         "plik tymczasowy nigdy się nie synchronizuje"
     );
 }
@@ -435,7 +435,7 @@ fn bandwidth_limit_slows_local_copy() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("duży.bin"), vec![3u8; 300 * 1024]).unwrap();
     let mut j = job(&l, &r, "LeftToRight");
-    j.bandwidth = syncpolak_core::model::Bandwidth {
+    j.bandwidth = syncron_core::model::Bandwidth {
         kbps: 200,
         off_kbps: 0,
         hours: None,
@@ -475,7 +475,7 @@ fn conflict_details_report_both_versions() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "0").unwrap();
     let mut j = job(&l, &r, "TwoWay");
-    j.conflict = syncpolak_core::plan::Conflict::Ask;
+    j.conflict = syncron_core::plan::Conflict::Ask;
     run_job(&j, &s, false, false).unwrap();
     fs::write(l.join("a.txt"), "lewy").unwrap();
     set_mtime(&l.join("a.txt"), 1_900_000_000);

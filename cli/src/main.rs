@@ -1,16 +1,16 @@
-//! `syncpolak`: synchronizacja z linii poleceń i w tle (tryb usługi) — bez interfejsu graficznego.
+//! `syncron`: synchronizacja z linii poleceń i w tle (tryb usługi) — bez interfejsu graficznego.
 //! Używa tego samego folderu danych i tych samych zadań co aplikacja okienkowa.
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, SystemTime};
-use syncpolak_core::engine;
-use syncpolak_core::model::{Job, Schedule};
-use syncpolak_core::runner::Runner;
+use syncron_core::engine;
+use syncron_core::model::{Job, Schedule};
+use syncron_core::runner::Runner;
 
-const HELP: &str = "SyncPolak (linia poleceń)
+const HELP: &str = "Syncron (linia poleceń)
 
 UŻYCIE:
-  syncpolak [--data-dir FOLDER] <polecenie>
+  syncron [--data-dir FOLDER] <polecenie>
 
 POLECENIA:
   list                          pokaż zadania
@@ -23,15 +23,15 @@ POLECENIA:
   service uninstall             usuń usługę
   version                       pokaż wersję
 
-Folder danych: --data-dir, zmienna SYNCPOLAK_DATA albo domyślny folder aplikacji.
+Folder danych: --data-dir, zmienna SYNCRON_DATA albo domyślny folder aplikacji.
 Kody wyjścia: 0 = ok, 1 = błąd, 2 = zakończono z konfliktami/błędami plików/zablokowaniem.
 ";
 
 fn default_data_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("SYNCPOLAK_DATA") {
+    if let Ok(d) = std::env::var("SYNCRON_DATA").or_else(|_| std::env::var("SYNCPOLAK_DATA")) {
         return d.into();
     }
-    let id = "pl.syncpolak.app";
+    let id = "pl.syncron.app";
     #[cfg(windows)]
     {
         PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join(id)
@@ -92,7 +92,7 @@ fn find_job<'a>(jobs: &'a [Job], q: &str) -> Result<&'a Job, String> {
     match c.len() {
         1 => Ok(c[0]),
         0 => Err(format!(
-            "nie znaleziono zadania „{q}” (zobacz: syncpolak list)"
+            "nie znaleziono zadania „{q}” (zobacz: syncron list)"
         )),
         _ => Err(format!(
             "„{q}” pasuje do wielu zadań: {}",
@@ -110,12 +110,12 @@ fn mtime(p: &Path) -> Option<SystemTime> {
 
 pub fn launchd_plist(exe: &str, dir: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>pl.syncpolak.daemon</string>\n  <key>ProgramArguments</key><array><string>{exe}</string><string>--data-dir</string><string>{dir}</string><string>daemon</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>pl.syncron.daemon</string>\n  <key>ProgramArguments</key><array><string>{exe}</string><string>--data-dir</string><string>{dir}</string><string>daemon</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n"
     )
 }
 
 pub fn systemd_unit(exe: &str, dir: &str) -> String {
-    format!("[Unit]\nDescription=SyncPolak\n\n[Service]\nExecStart=\"{exe}\" --data-dir \"{dir}\" daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n")
+    format!("[Unit]\nDescription=Syncron\n\n[Service]\nExecStart=\"{exe}\" --data-dir \"{dir}\" daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n")
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<(), String> {
@@ -147,7 +147,7 @@ fn service(args: &[String], dir: &Path) -> Result<(), String> {
     if cfg!(windows) {
         if install {
             let tr = format!("\"{exe_s}\" --data-dir \"{dir_s}\" daemon");
-            let mut a = vec!["/Create", "/TN", "SyncPolak Daemon", "/TR", &tr, "/F"];
+            let mut a = vec!["/Create", "/TN", "Syncron Daemon", "/TR", &tr, "/F"];
             a.extend(if boot {
                 vec!["/SC", "ONSTART", "/RU", "SYSTEM", "/RL", "HIGHEST"]
             } else {
@@ -155,7 +155,7 @@ fn service(args: &[String], dir: &Path) -> Result<(), String> {
             });
             run_cmd("schtasks", &a)?;
             println!(
-                "Zainstalowano zadanie „SyncPolak Daemon” ({}).",
+                "Zainstalowano zadanie „Syncron Daemon” ({}).",
                 if boot {
                     "przy starcie systemu, konto SYSTEM"
                 } else {
@@ -163,12 +163,12 @@ fn service(args: &[String], dir: &Path) -> Result<(), String> {
                 }
             );
         } else {
-            run_cmd("schtasks", &["/Delete", "/TN", "SyncPolak Daemon", "/F"])?;
-            println!("Usunięto zadanie „SyncPolak Daemon”.");
+            run_cmd("schtasks", &["/Delete", "/TN", "Syncron Daemon", "/F"])?;
+            println!("Usunięto zadanie „Syncron Daemon”.");
         }
     } else if cfg!(target_os = "macos") {
         let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let plist = PathBuf::from(&home).join("Library/LaunchAgents/pl.syncpolak.daemon.plist");
+        let plist = PathBuf::from(&home).join("Library/LaunchAgents/pl.syncron.daemon.plist");
         if install {
             std::fs::create_dir_all(plist.parent().unwrap()).map_err(|e| e.to_string())?;
             std::fs::write(&plist, launchd_plist(&exe_s, &dir_s)).map_err(|e| e.to_string())?;
@@ -181,18 +181,18 @@ fn service(args: &[String], dir: &Path) -> Result<(), String> {
         }
     } else {
         let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let unit = PathBuf::from(&home).join(".config/systemd/user/syncpolak.service");
+        let unit = PathBuf::from(&home).join(".config/systemd/user/syncron.service");
         if install {
             std::fs::create_dir_all(unit.parent().unwrap()).map_err(|e| e.to_string())?;
             std::fs::write(&unit, systemd_unit(&exe_s, &dir_s)).map_err(|e| e.to_string())?;
             run_cmd("systemctl", &["--user", "daemon-reload"])?;
-            run_cmd("systemctl", &["--user", "enable", "--now", "syncpolak"])?;
+            run_cmd("systemctl", &["--user", "enable", "--now", "syncron"])?;
             println!(
                 "Zainstalowano usługę systemd (użytkownika): {}",
                 unit.display()
             );
         } else {
-            let _ = run_cmd("systemctl", &["--user", "disable", "--now", "syncpolak"]);
+            let _ = run_cmd("systemctl", &["--user", "disable", "--now", "syncron"]);
             let _ = std::fs::remove_file(&unit);
             println!("Usunięto usługę systemd.");
         }
@@ -210,6 +210,7 @@ fn real_main() -> Result<ExitCode, String> {
         dir = PathBuf::from(args.remove(i + 1));
         args.remove(i);
     }
+    syncron_core::legacy::migrate_data_dir(&dir);
     // jak w aplikacji okienkowej: własna konfiguracja rclone w folderze danych
     std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
     let runner = Runner::new(dir.clone());
@@ -222,7 +223,7 @@ fn real_main() -> Result<ExitCode, String> {
 
     match cmd.as_str() {
         "help" | "--help" | "-h" => print!("{HELP}"),
-        "version" | "--version" | "-V" => println!("syncpolak {}", env!("CARGO_PKG_VERSION")),
+        "version" | "--version" | "-V" => println!("syncron {}", env!("CARGO_PKG_VERSION")),
         "list" => {
             let jobs = runner.load_jobs();
             if jobs.is_empty() {
@@ -289,7 +290,7 @@ fn real_main() -> Result<ExitCode, String> {
             let _ = log::set_logger(&StdoutLogger);
             log::set_max_level(log::LevelFilter::Info);
             log::info!(
-                "SyncPolak {} (daemon), folder danych: {}",
+                "Syncron {} (daemon), folder danych: {}",
                 env!("CARGO_PKG_VERSION"),
                 dir.display()
             );
@@ -323,7 +324,7 @@ fn real_main() -> Result<ExitCode, String> {
             let f = rest.first().ok_or("podaj plik źródłowy")?;
             let incoming: Vec<Job> =
                 serde_json::from_str(&std::fs::read_to_string(f).map_err(|e| e.to_string())?)
-                    .map_err(|e| format!("to nie jest plik konfiguracji SyncPolak: {e}"))?;
+                    .map_err(|e| format!("to nie jest plik konfiguracji Syncron: {e}"))?;
             let mut jobs = runner.load_jobs();
             for j in &incoming {
                 match jobs.iter().position(|x| x.id == j.id) {
@@ -335,7 +336,7 @@ fn real_main() -> Result<ExitCode, String> {
             println!("Zaimportowano zadań: {}", incoming.len());
         }
         "service" => service(rest, &dir)?,
-        other => return Err(format!("nieznane polecenie „{other}” (syncpolak help)")),
+        other => return Err(format!("nieznane polecenie „{other}” (syncron help)")),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -356,9 +357,9 @@ mod tests {
 
     #[test]
     fn service_files() {
-        let p = launchd_plist("/usr/local/bin/syncpolak", "/Users/x/dane");
+        let p = launchd_plist("/usr/local/bin/syncron", "/Users/x/dane");
         assert!(p.contains("<string>daemon</string>") && p.contains("RunAtLoad"));
-        let u = systemd_unit("/opt/syncpolak", "/home/x/dane");
-        assert!(u.contains("ExecStart=\"/opt/syncpolak\" --data-dir \"/home/x/dane\" daemon"));
+        let u = systemd_unit("/opt/syncron", "/home/x/dane");
+        assert!(u.contains("ExecStart=\"/opt/syncron\" --data-dir \"/home/x/dane\" daemon"));
     }
 }

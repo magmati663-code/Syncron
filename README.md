@@ -1,4 +1,4 @@
-# SyncPolak
+# Syncron
 
 Lekka aplikacja (Windows + macOS) do synchronizacji folderów, dysków sieciowych (UNC/SMB/NAS) oraz chmur
 (Google Drive, OneDrive, Bitrix24 Dysk przez WebDAV) z pełną obsługą polskich znaków. Plan: [PLAN.md](PLAN.md).
@@ -9,7 +9,7 @@ gotowe pliki `.exe`/`.msi` (Windows) i `.dmg` (macOS Apple Silicon i Intel) poja
 
 Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
 - **Windows:** SmartScreen → „Więcej informacji” → „Uruchom mimo to”.
-- **macOS:** prawy przycisk na aplikacji → „Otwórz” (albo `xattr -cr /Applications/SyncPolak.app`). Nadaj dostęp do dysku
+- **macOS:** prawy przycisk na aplikacji → „Otwórz” (albo `xattr -cr /Applications/Syncron.app`). Nadaj dostęp do dysku
   (Ustawienia systemu → Prywatność → Pełny dostęp do dysku), jeśli synchronizujesz foldery chronione.
 
 ## Co potrafi
@@ -39,13 +39,13 @@ Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
   postęp synchronizacji na żywo, ręczne rozstrzyganie konfliktów („Zachowaj lewą/prawą”), podpowiedzi o niedostępnych folderach.
 
 ## Linia poleceń i praca bez okna
-Do instalatora dołączona jest wersja `syncpolak` (także jako osobny plik w wydaniu), korzystająca z tego samego folderu danych i zadań:
+Do instalatora dołączona jest wersja `syncron` (także jako osobny plik w wydaniu), korzystająca z tego samego folderu danych i zadań:
 ```
-syncpolak list                         # zadania
-syncpolak run "Dokumenty" --dry-run    # symulacja (bez --dry-run: uruchomienie; --force pomija zabezpieczenia)
-syncpolak daemon                       # działa w tle według harmonogramów (przeładowuje zadania po zmianie w aplikacji)
-syncpolak service install [--boot]     # usługa: logowanie (domyślnie) lub start systemu (Windows, SYSTEM, wymaga admina)
-syncpolak export/import plik.json
+syncron list                         # zadania
+syncron run "Dokumenty" --dry-run    # symulacja (bez --dry-run: uruchomienie; --force pomija zabezpieczenia)
+syncron daemon                       # działa w tle według harmonogramów (przeładowuje zadania po zmianie w aplikacji)
+syncron service install [--boot]     # usługa: logowanie (domyślnie) lub start systemu (Windows, SYSTEM, wymaga admina)
+syncron export/import plik.json
 ```
 Kody wyjścia: 0 = ok, 1 = błąd, 2 = konflikty/błędy plików/zablokowanie. Usługa na macOS to agent launchd, na Linuksie usługa systemd użytkownika.
 
@@ -59,7 +59,7 @@ Połączenia z chmurami obsługuje dołączony do instalatora [rclone](https://r
 
 ## Rozwój
 ```
-cargo test -p syncpolak-core          # silnik + testy integracyjne
+cargo test -p syncron-core          # silnik + testy integracyjne
 cd app && npm install && npx tauri dev  # aplikacja (wymaga rclone w PATH lub app/src-tauri/bin)
 ```
 Struktura: `core/` (silnik w Rust), `app/src-tauri` (Tauri: komendy, tray), `app/ui` (interfejs HTML/JS).

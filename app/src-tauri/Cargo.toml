@@ -1,14 +1,14 @@
 [package]
-name = "syncpolak-app"
-version = "0.6.0"
+name = "syncron-app"
+version = "0.7.0"
 edition = "2021"
-description = "SyncPolak: synchronizacja folderów, dysków sieciowych i chmur"
+description = "Syncron: synchronizacja folderów, dysków sieciowych i chmur"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-syncpolak-core = { path = "../../core" }
+syncron-core = { path = "../../core" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"

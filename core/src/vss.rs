@@ -81,7 +81,7 @@ fn ps(_script: &str) -> Result<String, String> {
 static REGISTRY: Mutex<()> = Mutex::new(());
 
 fn registry_path() -> PathBuf {
-    std::env::temp_dir().join("syncpolak-vss-active.txt")
+    std::env::temp_dir().join("syncron-vss-active.txt")
 }
 
 /// Zapisuje identyfikatory aktywnych migawek, żeby po awarii aplikacji dało się je usunąć (`cleanup_stale`).
@@ -131,7 +131,7 @@ fn create(volume: &str) -> Result<Shadow, String> {
         return Err("VSS jest dostępny tylko w systemie Windows".into());
     }
     if !is_admin() {
-        return Err("VSS wymaga uprawnień administratora — uruchom SyncPolak jako administrator (Ustawienia → VSS)".into());
+        return Err("VSS wymaga uprawnień administratora — uruchom Syncron jako administrator (Ustawienia → VSS)".into());
     }
     let script = format!(
         "$r = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create -Arguments @{{Volume='{volume}'; Context='ClientAccessible'}}; \
@@ -213,7 +213,8 @@ pub fn restart_elevated(exe: &Path) -> Result<(), String> {
     .map(|_| ())
 }
 
-const TASK: &str = "SyncPolak";
+const TASK: &str = "Syncron";
+const LEGACY_TASK: &str = "SyncPolak";
 
 /// Autostart przy logowaniu z uprawnieniami administratora (zadanie harmonogramu; wymaga bieżących uprawnień admina).
 pub fn set_elevated_autostart(exe: &Path, enable: bool) -> Result<(), String> {
@@ -233,7 +234,7 @@ pub fn set_elevated_autostart(exe: &Path, enable: bool) -> Result<(), String> {
              Register-ScheduledTask -TaskName '{TASK}' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null"
         )
     } else {
-        format!("Unregister-ScheduledTask -TaskName '{TASK}' -Confirm:$false -ErrorAction SilentlyContinue")
+        format!("foreach ($n in '{TASK}','{LEGACY_TASK}') {{ Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue }}")
     };
     ps(&script).map(|_| ())
 }

@@ -2,7 +2,7 @@ use std::fs;
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_syncpolak"))
+    Command::new(env!("CARGO_BIN_EXE_syncron"))
 }
 
 fn setup() -> (
