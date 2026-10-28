@@ -311,3 +311,55 @@ fn verify_checksum_and_list_dirs() {
     let dirs = syncpolak_core::engine::list_dirs(l.to_str().unwrap(), "").unwrap();
     assert_eq!(dirs, vec!["Archiwum", "Łódź"]);
 }
+
+#[test]
+fn unavailable_target_is_safe_and_recovers() {
+    let (_t, l, r, s) = setup();
+    for i in 0..6 {
+        fs::write(l.join(format!("f{i}.txt")), "x").unwrap();
+    }
+    let j = job(&l, &r, "TwoWay");
+    run_job(&j, &s, false, false).unwrap();
+    // 1. udział znika (zerwane połączenie / restart serwera): błąd, nic nie jest usuwane
+    fs::remove_dir_all(&r).unwrap();
+    assert!(run_job(&j, &s, false, false).is_err());
+    assert_eq!(
+        fs::read_dir(&l)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().is_file())
+            .count(),
+        6
+    );
+    // 2. udział wraca pusty (np. niezamontowany dysk): zabezpieczenie blokuje, lewa strona nietknięta
+    fs::create_dir_all(&r).unwrap();
+    let rep = run_job(&j, &s, false, false).unwrap();
+    assert!(rep.blocked.is_some(), "{rep:?}");
+    assert_eq!(
+        fs::read_dir(&l)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().is_file())
+            .count(),
+        6
+    );
+    // 3. po jawnym potwierdzeniu użytkownika pliki wracają na prawą stronę
+    let rep = run_job(&j, &s, false, true).unwrap();
+    assert!(rep.blocked.is_none());
+}
+
+#[test]
+fn stale_temp_files_are_cleaned() {
+    let (_t, l, r, s) = setup();
+    fs::write(l.join("a.txt"), "x").unwrap();
+    let old = r.join("duży.bin.syncpolak.tmp");
+    let fresh = r.join("trwa.bin.syncpolak.tmp");
+    fs::write(&old, "ucięty").unwrap();
+    fs::write(&fresh, "w toku").unwrap();
+    set_mtime(&old, 1_000_000_000);
+    run_job(&job(&l, &r, "TwoWay"), &s, false, false).unwrap();
+    assert!(!old.exists(), "stary plik tymczasowy powinien zniknąć");
+    assert!(fresh.exists(), "świeży (trwające kopiowanie) zostaje");
+    assert!(
+        !l.join("duży.bin.syncpolak.tmp").exists(),
+        "plik tymczasowy nigdy się nie synchronizuje"
+    );
+}

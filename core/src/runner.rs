@@ -356,7 +356,25 @@ fn ts_in(d: Duration) -> i64 {
 }
 
 fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir: PathBuf) {
-    let _watcher = make_watcher(&job, tx);
+    let mut watcher = make_watcher(&job, tx.clone());
+    // po awarii/odłączeniu folderu uchwyt watchera przestaje działać: odtwarzamy go po powrocie do zdrowia
+    let mut stale = false;
+    let refresh =
+        |watcher: &mut Option<notify::RecommendedWatcher>, stale: &mut bool, inner: &Inner| {
+            let state = inner
+                .status
+                .lock()
+                .unwrap()
+                .get(&job.id)
+                .map(|s| s.state.clone())
+                .unwrap_or_default();
+            if state == "error" || state == "waiting" {
+                *stale = true;
+            } else if *stale {
+                *watcher = make_watcher(&job, tx.clone());
+                *stale = false;
+            }
+        };
     let mut backoff = 0u32;
     // skan startowy (nadrobienie zmian z czasu, gdy aplikacja była wyłączona)
     let mut next: Option<Instant> = (job.schedule != Schedule::Manual).then(Instant::now);
@@ -442,7 +460,10 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
             .unwrap_or(Duration::from_secs(3600));
         match rx.recv_timeout(wait) {
             Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-            Ok(Msg::RunNow { force }) => run(force, true, &mut next),
+            Ok(Msg::RunNow { force }) => {
+                run(force, true, &mut next);
+                refresh(&mut watcher, &mut stale, &inner);
+            }
             Ok(Msg::Trigger { kind, vol }) => {
                 let want = match kind.as_str() {
                     "wake" => job.triggers.on_wake,
@@ -454,7 +475,9 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                 };
                 if want {
                     thread::sleep(Duration::from_secs(3)); // dysk/sieć potrzebują chwili na ustabilizowanie
+                    watcher = make_watcher(&job, tx.clone()); // dysk/sieć wróciły: nowy uchwyt
                     run(false, false, &mut next);
+                    refresh(&mut watcher, &mut stale, &inner);
                 }
             }
             Ok(Msg::FsEvent) => {
@@ -469,10 +492,12 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                     }
                 }
                 run(false, false, &mut next);
+                refresh(&mut watcher, &mut stale, &inner);
             }
             Err(RecvTimeoutError::Timeout) => {
                 if next.is_some() {
-                    run(false, false, &mut next)
+                    run(false, false, &mut next);
+                    refresh(&mut watcher, &mut stale, &inner);
                 }
             }
         }

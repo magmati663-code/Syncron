@@ -535,6 +535,19 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
         for ent in rd {
             let ent = ent.map_err(|e| format!("{}: {e}", dir.display()))?;
             let name = ent.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".syncpolak.tmp") {
+                // pozostałość po przerwanym kopiowaniu (zerwane połączenie, restart): sprzątamy, gdy jest stara
+                if let Ok(age) = ent
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|t| t.elapsed().unwrap_or_default())
+                {
+                    if age > Duration::from_secs(3600) {
+                        let _ = fs::remove_file(ent.path());
+                    }
+                }
+                continue;
+            }
             if name == TRASH_DIR || names::is_temp(&name) {
                 continue;
             }
