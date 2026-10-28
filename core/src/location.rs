@@ -944,7 +944,20 @@ fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Resul
     let mut inp = open_shared(src)?;
     let before = inp.metadata()?;
     let res = (|| {
-        let (mut out, tmp) = create_new_tmp(dst)?;
+        // równoległe sprzątanie pustych folderów (po usunięciu pliku) może zabrać folder tuż przed utworzeniem
+        // pliku tymczasowego: wtedy tworzymy folder ponownie (gdy plik tymczasowy już istnieje, folder nie jest pusty)
+        let mut tries = 0;
+        let (mut out, tmp) = loop {
+            match create_new_tmp(dst) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound && tries < 8 => {
+                    tries += 1;
+                    if let Some(parent) = dst.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                }
+                other => break other?,
+            }
+        };
         *tmp_path.borrow_mut() = Some(tmp.clone());
         let mut hasher = blake3::Hasher::new();
         if verify || bw.current_kbps() > 0 || bw.hours.is_some() {
