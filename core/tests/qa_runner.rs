@@ -11,6 +11,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
+#[allow(unused_imports)]
 use std::sync::{Arc, Barrier, Mutex, Once, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +24,7 @@ static GLOBAL: RwLock<()> = RwLock::new(());
 fn shared() -> RwLockReadGuard<'static, ()> {
     GLOBAL.read().unwrap_or_else(|e| e.into_inner())
 }
+#[allow(dead_code)]
 fn exclusive() -> RwLockWriteGuard<'static, ()> {
     GLOBAL.write().unwrap_or_else(|e| e.into_inner())
 }
@@ -1300,7 +1302,7 @@ fn r3_long_running_30s_stable_threads_and_status() {
     let mut i = 0usize;
     while start.elapsed() < Duration::from_secs(30) {
         fs::write(f.l.join(format!("d{}.txt", i % 25)), format!("rewizja {i}")).unwrap();
-        if i % 7 == 0 {
+        if i.is_multiple_of(7) {
             runner.run_now("q-long", false);
         }
         i += 1;

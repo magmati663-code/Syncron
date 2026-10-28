@@ -188,6 +188,7 @@ fn zapis_nie_podaza_za_symlinkiem_w_folderze_docelowym() {
 // 3. Ścieżki względne ze zdalnego listingu (fałszywy rclone)
 // ======================================================================
 
+#[allow(dead_code)]
 static FAKE: Mutex<()> = Mutex::new(());
 
 /// Fałszywy `rclone`: `lsjson` zwraca JSON z pliku, `copyto` zapisuje plik w miejscu docelowym i loguje argumenty.

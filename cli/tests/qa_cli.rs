@@ -722,6 +722,7 @@ fn list_interval_below_minute_not_zero_min() {
     assert!(!out_s(&run(&e.d, &["list"])).contains("co 0 min"));
 }
 
+#[cfg(unix)]
 #[test]
 fn readonly_data_dir_import_reports_error_not_panic() {
     use std::os::unix::fs::PermissionsExt;
@@ -775,6 +776,7 @@ fn data_dir_resolution_order() {
     assert!(out_s(&o).contains("Zad-C"));
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn default_data_dir_follows_xdg_and_home() {
     let e = env();
@@ -844,6 +846,7 @@ fn cli_migrates_from_old_sibling_folder() {
 
 // ───────────────────────── pliki usług ─────────────────────────
 
+#[cfg(unix)]
 fn fake_systemctl(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin_dir = dir.join("fakebin");
@@ -861,6 +864,7 @@ fn fake_systemctl(dir: &Path) -> PathBuf {
     bin_dir
 }
 
+#[cfg(unix)]
 fn install_service(e: &Env, data_dir: &str) -> (Output, String) {
     let home = e.root.join("home");
     fs::create_dir_all(&home).unwrap();
@@ -876,6 +880,7 @@ fn install_service(e: &Env, data_dir: &str) -> (Output, String) {
     (o, unit)
 }
 
+#[cfg(unix)]
 #[cfg(target_os = "linux")]
 #[test]
 fn service_install_writes_unit_with_quoted_polish_path_with_spaces() {
@@ -891,6 +896,7 @@ fn service_install_writes_unit_with_quoted_polish_path_with_spaces() {
     assert!(log.contains("--user daemon-reload") && log.contains("--user enable --now syncron"));
 }
 
+#[cfg(unix)]
 #[cfg(target_os = "linux")]
 #[test]
 fn service_uninstall_removes_unit() {
@@ -908,6 +914,7 @@ fn service_uninstall_removes_unit() {
     assert!(!home.join(".config/systemd/user/syncron.service").exists());
 }
 
+#[cfg(unix)]
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "BUG T7-13: ścieżka z nową linią we --data-dir wstrzykuje dodatkowe dyrektywy do pliku unit systemd"]
@@ -940,6 +947,7 @@ fn systemd_unit_escapes_quote_and_backslash() {
     assert!(u.contains("a\\\"b\\\\c"), "{u}");
 }
 
+#[cfg(unix)]
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "BUG T7-15: względne --data-dir trafia do pliku usługi bez zamiany na ścieżkę bezwzględną (usługa startuje z innym cwd)"]
@@ -999,6 +1007,7 @@ fn service_bad_subcommand_exit_1() {
     }
 }
 
+#[cfg(unix)]
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "BUG T7-17 (niska): nieznana opcja przy service install (np. --bot zamiast --boot) jest ignorowana"]
@@ -1059,6 +1068,7 @@ fn atomic_write_jobs(d: &Path, v: &Value) {
     fs::rename(tmp, d.join("jobs.json")).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn daemon_runs_interval_job_and_dies_cleanly_on_sigterm() {
     let e = env();

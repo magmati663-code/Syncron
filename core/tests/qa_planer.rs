@@ -1085,7 +1085,7 @@ fn r3_matrix_planner_idempotent_pure() {
                 };
                 for seed in 0..60u64 {
                     let mut rng = Rng(seed * 7919 + 13);
-                    let mut gen = |rng: &mut Rng| -> Option<Meta> {
+                    let gen = |rng: &mut Rng| -> Option<Meta> {
                         match rng.below(4) {
                             0 => None,
                             _ => Some(m(rng.below(3), (rng.below(4) * 10) as i64)),
