@@ -420,24 +420,29 @@ fn real_main() -> Result<ExitCode, String> {
             eprintln!();
             println!(
                 "Zadanie „{}”: przeskanowano {} (lewa) i {} (prawa).",
-                job.name, rep.scanned_left, rep.scanned_right
+                clean(&job.name),
+                rep.scanned_left,
+                rep.scanned_right
             );
             if dry {
                 println!("SYMULACJA: planowanych działań: {}", rep.planned.len());
                 for (k, a) in &rep.planned {
-                    println!("  {a:?}  {k}");
+                    println!("  {a:?}  {}", clean(k));
                 }
             } else {
                 println!("skopiowano {}, usunięto {}, przeniesiono {}, konflikty {}, zajęte {}, błędy {}", rep.copied, rep.deleted, rep.moved, rep.conflicts.len(), rep.busy.len(), rep.errors.len());
             }
             if let Some(b) = &rep.blocked {
-                println!("ZATRZYMANO przez zabezpieczenie: {b} (użyj --force, aby pominąć)");
+                println!(
+                    "ZATRZYMANO przez zabezpieczenie: {} (użyj --force, aby pominąć)",
+                    clean(b)
+                );
             }
             for e in rep.errors.iter().chain(rep.busy.iter()) {
-                println!("  ! {e}");
+                println!("  ! {}", clean(e));
             }
             if let Some(n) = &rep.vss_note {
-                println!("  VSS: {n}");
+                println!("  VSS: {}", clean(n));
             }
             if rep.blocked.is_some()
                 || !rep.errors.is_empty()
