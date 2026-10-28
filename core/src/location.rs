@@ -727,13 +727,41 @@ fn check_local_rel(rel: &str) -> Result<(), OpError> {
 /// Zwraca pełną ścieżkę `rel` pod `root` po sprawdzeniu, że żaden komponent nie jest dowiązaniem symbolicznym
 /// (zapis/odczyt nie może wyjść poza korzeń). `include_last` = sprawdź też ostatni komponent. `create` = utwórz
 /// brakujące foldery nadrzędne (pojedynczo, bez podążania za dowiązaniami).
+/// Błąd pojedynczej próby `resolve_local_once`: błąd domenowy (bez ponowień) albo błąd systemu plików.
+enum ResolveErr {
+    Op(OpError),
+    Io(io::Error),
+}
+
+/// Jak `resolve_local_once`, ale ponawia próbę przy przejściowych błędach wywołanych równoległym usuwaniem
+/// pustych folderów (patrz `transient_dir_error`).
 fn resolve_local(
     root: &Path,
     rel: &str,
     include_last: bool,
     create: bool,
 ) -> Result<PathBuf, OpError> {
-    check_local_rel(rel)?;
+    let mut tries = 0;
+    loop {
+        match resolve_local_once(root, rel, include_last, create) {
+            Ok(p) => return Ok(p),
+            Err(ResolveErr::Op(e)) => return Err(e),
+            Err(ResolveErr::Io(e)) if create && transient_dir_error(&e) && tries < 8 => {
+                tries += 1;
+                sleep(Duration::from_millis(2));
+            }
+            Err(ResolveErr::Io(e)) => return Err(e.into()),
+        }
+    }
+}
+
+fn resolve_local_once(
+    root: &Path,
+    rel: &str,
+    include_last: bool,
+    create: bool,
+) -> Result<PathBuf, ResolveErr> {
+    check_local_rel(rel).map_err(ResolveErr::Op)?;
     let parts: Vec<&str> = rel.split('/').collect();
     let n = if include_last {
         parts.len()
@@ -748,26 +776,26 @@ fn resolve_local(
         }
         match fs::symlink_metadata(&cur) {
             Ok(m) if m.file_type().is_symlink() => {
-                return Err(OpError::Failed(format!(
+                return Err(ResolveErr::Op(OpError::Failed(format!(
                     "odmowa zapisu: „{}” jest dowiązaniem symbolicznym (mogłoby wyprowadzić poza folder synchronizacji)",
                     parts[..=i].join("/")
-                )))
+                ))))
             }
             Ok(m) if m.is_dir() => {}
             Ok(_) => {
-                return Err(OpError::Failed(format!(
+                return Err(ResolveErr::Op(OpError::Failed(format!(
                     "„{}” nie jest folderem",
                     parts[..=i].join("/")
-                )))
+                ))))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound && create => {
                 match fs::create_dir(&cur) {
                     Ok(()) => {}
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(ResolveErr::Io(e)),
                 }
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(ResolveErr::Io(e)),
         }
     }
     Ok(cur)
