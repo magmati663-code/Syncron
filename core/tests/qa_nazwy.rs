@@ -444,6 +444,8 @@ fn r2_glob_umiarkowane_wzorce_szybkie() {
     assert!(t.elapsed() < Duration::from_secs(2));
 }
 
+// wymaga systemu plików, który trzyma osobno nazwy NFC i NFD (APFS i NTFS je normalizują/nie pozwalają na oba)
+#[cfg(target_os = "linux")]
 #[test]
 fn r2_kolizje_nfc_nfd_w_folderze_nie_gubia_pliku() {
     let (_t, l, r, s) = setup();
