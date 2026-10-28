@@ -186,7 +186,7 @@ fn katalog_tmp_synchronizowany_ale_plik_tmp_nie() {
     assert!(!r.join("x.tmp").exists());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")] // APFS (macOS) odrzuca nazwy spoza UTF-8
 #[test]
 fn nazwa_nie_utf8_pominieta_i_zgloszona() {
     use std::os::unix::ffi::OsStrExt;
