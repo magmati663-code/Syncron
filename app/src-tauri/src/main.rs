@@ -3,7 +3,10 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use syncron_core::engine::{self, HistoryRow, Report, TrashItem};
-use syncron_core::location::run_rclone;
+use syncron_core::location::{
+    rclone_config_path, rclone_obscure, remote_exists, run_rclone, set_remote_keys,
+    valid_param_key, REMOTE_KINDS,
+};
 use syncron_core::model::Job;
 use syncron_core::runner::{Runner, Status};
 use syncron_core::vss;
@@ -339,69 +342,132 @@ async fn list_remotes() -> Res<Vec<Remote>> {
     .map_err(|e| e.to_string())?
 }
 
+fn check_remote_name(name: &str) -> Res<()> {
+    if syncron_core::location::valid_remote_name(name) {
+        Ok(())
+    } else {
+        Err("Nazwa konta: min. 2 znaki, zaczyna się od litery lub cyfry; tylko litery ASCII, cyfry, _ i -."
+            .to_string())
+    }
+}
+
 /// Tworzy konto rclone. Pytania konfiguratora (np. wybór dysku OneDrive) są zatwierdzane wartościami domyślnymi;
-/// logowanie Google/Microsoft otwiera przeglądarkę.
+/// logowanie Google/Microsoft otwiera przeglądarkę. Sekrety (hasła, tokeny) nie trafiają do argumentów procesu:
+/// są zapisywane bezpośrednio w pliku konfiguracji rclone (hasła zaciemnione przez `rclone obscure -`).
 #[tauri::command]
 async fn add_remote(name: String, kind: String, params: HashMap<String, String>) -> Res<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        if name.len() < 2
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        check_remote_name(&name)?;
+        if !kind.chars().all(|c| c.is_ascii_alphanumeric())
+            || !REMOTE_KINDS.contains(&kind.as_str())
         {
-            return Err("Nazwa konta: min. 2 znaki, tylko litery ASCII, cyfry, _ i -.".to_string());
+            return Err(format!("Nieobsługiwany rodzaj konta: „{kind}”."));
         }
-        let kv: Vec<String> = params
-            .iter()
-            .filter(|(_, v)| !v.is_empty())
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect();
-        let mut args: Vec<&str> = vec!["config", "create", &name, &kind];
-        args.extend(kv.iter().map(|s| s.as_str()));
-        args.extend(["--non-interactive", "--obscure"]);
-        let mut out = run_rclone(&args)?;
-        for _ in 0..20 {
-            let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_default();
-            if let Some(e) = v["Error"].as_str().filter(|e| !e.is_empty()) {
-                return Err(e.to_string());
-            }
-            let state = v["State"].as_str().unwrap_or("");
-            if state.is_empty() {
-                return Ok(());
-            }
-            let opt = &v["Option"];
-            let mut answer = opt["Value"].as_str().unwrap_or("").to_string();
-            if answer.is_empty() {
-                answer = opt["DefaultStr"].as_str().unwrap_or("").to_string();
-            }
-            if answer.is_empty() {
-                answer = opt["Examples"][0]["Value"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-            }
-            out = run_rclone(&[
-                "config",
-                "update",
-                &name,
-                "--continue",
-                "--state",
-                state,
-                "--result",
-                &answer,
-                "--non-interactive",
-            ])?;
+        if let Some(k) = params.keys().find(|k| !valid_param_key(k)) {
+            return Err(format!("Niedozwolony parametr konta: „{k}”."));
         }
-        Err("Konfigurator rclone nie zakończył się; uruchom `rclone config` ręcznie.".to_string())
+        if params.values().any(|v| v.contains(['\n', '\r'])) {
+            return Err("Wartości pól konta nie mogą zawierać znaków nowej linii.".to_string());
+        }
+        if remote_exists(&name)? {
+            return Err(format!(
+                "Konto „{name}” już istnieje. Wybierz inną nazwę albo najpierw usuń to konto."
+            ));
+        }
+        let result = create_remote(&name, &kind, &params);
+        if result.is_err() {
+            // nie zostawiaj częściowo utworzonego konta
+            let _ = run_rclone(&["config", "delete", "--", &name]);
+        }
+        result
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
+fn is_secret_key(k: &str) -> bool {
+    let k = k.to_lowercase();
+    ["pass", "secret", "token", "key"]
+        .iter()
+        .any(|w| k.contains(w))
+}
+
+fn create_remote(name: &str, kind: &str, params: &HashMap<String, String>) -> Res<()> {
+    let (secret, plain): (Vec<_>, Vec<_>) = params
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .partition(|(k, _)| is_secret_key(k));
+    let kv: Vec<String> = plain.iter().map(|(k, v)| k.to_string() + "=" + v).collect();
+    let mut out;
+    if secret.is_empty() {
+        let mut args: Vec<&str> = vec!["config", "create", "--non-interactive", "--obscure", "--"];
+        args.extend([name, kind]);
+        args.extend(kv.iter().map(|s| s.as_str()));
+        out = run_rclone(&args)?;
+    } else {
+        let mut keys = vec![("type".to_string(), kind.to_string())];
+        for (k, v) in &secret {
+            let v = if k.to_lowercase().contains("pass") {
+                rclone_obscure(v)?
+            } else {
+                v.to_string()
+            };
+            keys.push((k.to_string(), v));
+        }
+        set_remote_keys(&rclone_config_path()?, name, &keys)?;
+        let mut args: Vec<&str> = vec!["config", "update", "--non-interactive", "--obscure", "--"];
+        args.push(name);
+        args.extend(kv.iter().map(|s| s.as_str()));
+        out = run_rclone(&args)?;
+    }
+    for _ in 0..20 {
+        let v: serde_json::Value = serde_json::from_str(out.trim())
+            .map_err(|_| "Konfigurator rclone zwrócił nieoczekiwaną odpowiedź.".to_string())?;
+        if let Some(e) = v["Error"].as_str().filter(|e| !e.is_empty()) {
+            return Err(e.to_string());
+        }
+        let state = v["State"].as_str().unwrap_or("");
+        if state.is_empty() {
+            return Ok(());
+        }
+        let opt = &v["Option"];
+        if opt["IsPassword"].as_bool().unwrap_or(false) {
+            return Err(
+                "Konfigurator rclone wymaga podania hasła; uruchom `rclone config` ręcznie."
+                    .to_string(),
+            );
+        }
+        let mut answer = opt["Value"].as_str().unwrap_or("").to_string();
+        if answer.is_empty() {
+            answer = opt["DefaultStr"].as_str().unwrap_or("").to_string();
+        }
+        if answer.is_empty() {
+            answer = opt["Examples"][0]["Value"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+        }
+        out = run_rclone(&[
+            "config",
+            "update",
+            "--continue",
+            "--state",
+            state,
+            "--result",
+            &answer,
+            "--non-interactive",
+            "--",
+            name,
+        ])?;
+    }
+    Err("Konfigurator rclone nie zakończył się; uruchom `rclone config` ręcznie.".to_string())
+}
+
 #[tauri::command]
 async fn delete_remote(name: String) -> Res<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_rclone(&["config", "delete", &name]).map(|_| ())
+        check_remote_name(&name)?;
+        run_rclone(&["config", "delete", "--", &name]).map(|_| ())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -410,13 +476,15 @@ async fn delete_remote(name: String) -> Res<()> {
 #[tauri::command]
 async fn test_remote(name: String) -> Res<String> {
     tauri::async_runtime::spawn_blocking(move || {
+        check_remote_name(&name)?;
         run_rclone(&[
             "lsd",
-            &format!("{name}:"),
             "--max-depth",
             "1",
             "--contimeout",
             "15s",
+            "--",
+            &format!("{name}:"),
         ])
         .map(|o| {
             format!(

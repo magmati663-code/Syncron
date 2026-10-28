@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 pub const TRASH_DIR: &str = ".syncron-trash";
 /// Nazwy z czasów, gdy aplikacja nazywała się SyncPolak: nadal pomijane przy listowaniu.
@@ -98,20 +98,23 @@ pub enum Location {
 
 impl Location {
     pub fn parse(s: &str) -> Location {
+        use unicode_normalization::UnicodeNormalization;
         let s = s.trim();
         if let Some(i) = s.find(':') {
-            let name = &s[..i];
+            // nazwa konta w NFC (macOS podaje „ó” jako litera + znak łączący)
+            let name: String = s[..i].nfc().collect();
             let rest = &s[i + 1..];
+            let nchars = name.chars().count();
             // litera dysku (C:\ , C:/) to ścieżka lokalna; nazwa zdalna ma min. 2 znaki
-            let drive = name.len() == 1
-                && (rest.is_empty() || rest.starts_with('\\') || rest.starts_with('/'));
-            if name.len() >= 2
+            let drive =
+                nchars == 1 && (rest.is_empty() || rest.starts_with('\\') || rest.starts_with('/'));
+            if nchars >= 2
                 && !drive
                 && name
                     .chars()
                     .all(|c| c.is_alphanumeric() || "_-. ".contains(c))
             {
-                return Location::Rclone(s.to_string());
+                return Location::Rclone(format!("{name}:{rest}"));
             }
         }
         Location::Local(PathBuf::from(s))
@@ -1018,36 +1021,183 @@ fn rclone_bin() -> String {
     std::env::var("SYNCRON_RCLONE").unwrap_or_else(|_| "rclone".into())
 }
 
+/// Limit czasu jednego wywołania rclone. `SYNCRON_RCLONE_TIMEOUT` (sekundy) nadpisuje wartości domyślne:
+/// kopiowanie/przenoszenie – 6 godzin, konfiguracja (logowanie w przeglądarce) – 15 minut, reszta – 10 minut.
+fn rclone_timeout(op: &str) -> Duration {
+    if let Some(n) = std::env::var("SYNCRON_RCLONE_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+    {
+        return Duration::from_secs(n);
+    }
+    Duration::from_secs(match op {
+        "copyto" | "moveto" | "copy" | "move" | "sync" => 6 * 3600,
+        "config" => 900,
+        _ => 600,
+    })
+}
+
+/// Uruchamia rclone bez stdin, z limitem czasu. Zob. `run_rclone_with`.
 pub fn run_rclone(args: &[&str]) -> Result<String, String> {
+    run_rclone_with(args, &[], None)
+}
+
+/// Jak `run_rclone`, ale z dodatkowymi zmiennymi środowiskowymi procesu rclone (np. sekrety, które nie mogą
+/// trafić do argumentów widocznych na liście procesów) i opcjonalnymi danymi na stdin.
+pub fn run_rclone_with(
+    args: &[&str],
+    env: &[(String, String)],
+    stdin_data: Option<&str>,
+) -> Result<String, String> {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    let op = args.first().copied().unwrap_or("");
+    let limit = rclone_timeout(op);
     let mut c = Command::new(rclone_bin());
-    c.args(args);
+    c.args(args)
+        .stdin(if stdin_data.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // limity połączenia/bezczynności dla operacji sieciowych (przez środowisko: nie zmieniają listy argumentów)
+    if matches!(
+        op,
+        "lsjson" | "lsd" | "copyto" | "moveto" | "deletefile" | "cat" | "purge" | "delete"
+    ) {
+        for (k, v) in [("RCLONE_CONTIMEOUT", "30s"), ("RCLONE_TIMEOUT", "120s")] {
+            if std::env::var_os(k).is_none() {
+                c.env(k, v);
+            }
+        }
+    }
+    for (k, v) in env {
+        c.env(k, v);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000); // bez okna konsoli
     }
-    let out = c
-        .output()
-        .map_err(|e| format!("nie można uruchomić rclone: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let mut child = c.spawn().map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            format!(
+                "nie można uruchomić rclone: nie znaleziono programu „{}”; zainstaluj rclone albo wskaż go w zmiennej SYNCRON_RCLONE",
+                rclone_bin()
+            )
+        } else {
+            format!("nie można uruchomić rclone: {e}")
+        }
+    })?;
+    if let (Some(data), Some(mut si)) = (stdin_data, child.stdin.take()) {
+        let _ = si.write_all(data.as_bytes());
+    }
+    let (tx, rx) = mpsc::channel::<(bool, Vec<u8>)>();
+    let mut readers = 0;
+    if let Some(mut so) = child.stdout.take() {
+        let tx = tx.clone();
+        readers += 1;
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = so.read_to_end(&mut b);
+            let _ = tx.send((true, b));
+        });
+    }
+    if let Some(mut se) = child.stderr.take() {
+        let tx = tx.clone();
+        readers += 1;
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = se.read_to_end(&mut b);
+            let _ = tx.send((false, b));
+        });
+    }
+    drop(tx);
+    let start = std::time::Instant::now();
+    let mut nap = 1u64;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {
+                if start.elapsed() >= limit {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "rclone ({op}) nie odpowiedział w ciągu {} s i został przerwany (limit czasu; zmienna SYNCRON_RCLONE_TIMEOUT)",
+                        limit.as_secs()
+                    ));
+                }
+                sleep(Duration::from_millis(nap));
+                nap = (nap * 2).min(20);
+            }
+            Err(e) => return Err(format!("nie można sprawdzić stanu rclone: {e}")),
+        }
+    };
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    for _ in 0..readers {
+        // proces potomny mógł zostawić proces trzymający rury: nie czekaj w nieskończoność
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok((true, b)) => stdout = b,
+            Ok((false, b)) => stderr = b,
+            Err(_) => break,
+        }
+    }
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        let err = String::from_utf8_lossy(&stderr).trim().to_string();
+        if !err.is_empty() {
+            return Err(err);
+        }
+        let out = String::from_utf8_lossy(&stdout);
+        let out: String = out.trim().chars().take(300).collect();
+        let code = match status.code() {
+            Some(c) => format!("kodem {c}"),
+            None => "przez sygnał".to_string(),
+        };
+        Err(if out.is_empty() {
+            format!("rclone ({op}) zakończył się {code} bez komunikatu błędu")
+        } else {
+            format!("rclone ({op}) zakończył się {code}: {out}")
+        })
     }
 }
 
 fn rclone_op(args: &[&str]) -> Result<(), OpError> {
     run_rclone(args).map(|_| ()).map_err(|e| {
+        // tylko znane frazy (nie podciąg z nazwy pliku, np. „unlocked.txt”)
         let l = e.to_lowercase();
         if l.contains("used by another process")
-            || l.contains("locked")
             || l.contains("sharing violation")
+            || l.contains("lock violation")
+            || l.contains("file is locked")
+            || l.contains("is locked by")
         {
             OpError::Busy(e)
         } else {
             OpError::Failed(e)
         }
     })
+}
+
+/// Nazwa konta rclone podawana z aplikacji: min. 2 znaki, zaczyna się od litery/cyfry ASCII.
+pub fn valid_remote_name(n: &str) -> bool {
+    n.chars().count() >= 2
+        && n.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Dozwolone rodzaje kont tworzonych z aplikacji (`local` celowo nie).
+pub const REMOTE_KINDS: &[&str] = &["drive", "onedrive", "webdav", "sftp", "crypt"];
+
+/// Klucz parametru konta: tylko litery ASCII, cyfry i `_` (żadne `--opcje`).
+pub fn valid_param_key(k: &str) -> bool {
+    !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, String> {
@@ -1057,12 +1207,32 @@ fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, Stri
         if it["IsDir"].as_bool().unwrap_or(false) {
             continue;
         }
-        let size = it["Size"].as_i64().unwrap_or(-1);
-        if size < 0 {
-            continue; // np. dokumenty Google bez rozmiaru
-        }
         let Some(path) = it["Path"].as_str().map(str::to_string) else {
             continue; // wpis bez ścieżki
+        };
+        let sz = &it["Size"];
+        let size = if let Some(n) = sz.as_i64().filter(|n| *n >= 0) {
+            n as u64
+        } else if sz.as_u64().is_some() {
+            // powyżej i64::MAX: nie ukrywaj tego jako „plik zniknął”
+            return Err(format!(
+                "rclone zwrócił rozmiar pliku „{path}” poza zakresem ({sz}); przerwano listowanie"
+            ));
+        } else if sz.is_null() || sz.as_i64().is_some() {
+            // rozmiar nieznany (-1 lub brak): pomijamy tylko prawdziwe dokumenty bez rozmiaru
+            // (Google Docs: application/vnd.google-apps.*, albo wpis bez rozmiaru i daty);
+            // inny plik bez rozmiaru to błąd listingu, żeby nie wyglądał na usunięty
+            let google_doc = it["MimeType"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("application/vnd.google-apps"));
+            if google_doc || it["ModTime"].is_null() {
+                continue;
+            }
+            return Err(format!(
+                "rclone nie podał rozmiaru pliku „{path}” (Size={sz}); przerwano listowanie, by plik nie wyglądał na usunięty"
+            ));
+        } else {
+            continue; // wartość nieliczbowa/ułamkowa: wpis uszkodzony
         };
         let name = path.rsplit('/').next().unwrap_or("");
         if skip_special
@@ -1072,29 +1242,19 @@ fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, Stri
         {
             continue;
         }
+        // brak/nieczytelny ModTime: stała wartość 0 (stabilna między przebiegami, nie „teraz”)
         let mtime = it["ModTime"]
             .as_str()
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .map(|d| d.timestamp())
-            .unwrap_or_else(|| {
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0)
-            });
-        out.push((
-            path,
-            Meta {
-                size: size as u64,
-                mtime,
-            },
-        ));
+            .unwrap_or(0);
+        out.push((path, Meta { size, mtime }));
     }
     Ok(out)
 }
 
 fn list_rclone(base: &str) -> Result<Scan, String> {
-    match run_rclone(&["lsjson", "-R", "--files-only", "--no-mimetype", base]) {
+    match run_rclone(&["lsjson", "-R", "--files-only", base]) {
         Ok(s) => {
             // ścieżki ze zdalnego listingu to dane z zewnątrz: odrzucamy `..`, bezwzględne, puste itp.
             let mut skipped = Vec::new();
@@ -1117,6 +1277,117 @@ fn list_rclone(base: &str) -> Result<Scan, String> {
         Err(e) if e.to_lowercase().contains("directory not found") => Ok((vec![], vec![])),
         Err(e) => Err(e),
     }
+}
+
+/// Czy konto o tej nazwie jest już w konfiguracji rclone (`listremotes`).
+pub fn remote_exists(name: &str) -> Result<bool, String> {
+    let out = run_rclone(&["listremotes"])?;
+    Ok(out
+        .lines()
+        .any(|l| l.trim().strip_suffix(':').unwrap_or(l.trim()) == name))
+}
+
+/// Zaciemnia hasło poleceniem `rclone obscure -` (hasło idzie przez stdin, nie przez argumenty).
+pub fn rclone_obscure(plain: &str) -> Result<String, String> {
+    run_rclone_with(&["obscure", "-"], &[], Some(plain)).map(|s| s.trim().to_string())
+}
+
+/// Ścieżka pliku konfiguracji rclone: `RCLONE_CONFIG` albo wynik `rclone config file`.
+pub fn rclone_config_path() -> Result<PathBuf, String> {
+    if let Some(p) = std::env::var_os("RCLONE_CONFIG").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(p));
+    }
+    let out = run_rclone(&["config", "file"])?;
+    out.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "nie można ustalić pliku konfiguracji rclone".to_string())
+}
+
+/// Zapisuje klucze w sekcji `[name]` pliku konfiguracji rclone (tworzy sekcję, zastępuje istniejące klucze).
+/// Służy do przekazania sekretów bez umieszczania ich w argumentach procesu rclone.
+pub fn set_remote_keys(conf: &Path, name: &str, kv: &[(String, String)]) -> Result<(), String> {
+    for (k, v) in kv {
+        if !valid_param_key(k) || v.contains(['\n', '\r']) {
+            return Err(format!("niepoprawny parametr konta „{k}”"));
+        }
+    }
+    let old = fs::read_to_string(conf).unwrap_or_default();
+    let header = format!("[{name}]");
+    let mut out: Vec<String> = Vec::new();
+    let mut in_sec = false;
+    let mut found = false;
+    let mut pending: Vec<String> = Vec::new(); // puste linie na końcu sekcji
+    let flush = |out: &mut Vec<String>, pending: &mut Vec<String>, in_sec: bool, found: bool| {
+        if in_sec && found {
+            for (k, v) in kv {
+                out.push(format!("{k} = {v}"));
+            }
+        }
+        out.append(pending);
+    };
+    for line in old.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            if in_sec {
+                flush(&mut out, &mut pending, in_sec, found);
+                in_sec = false;
+            }
+            if t == header {
+                in_sec = true;
+                found = true;
+            }
+            out.push(line.to_string());
+            continue;
+        }
+        if in_sec {
+            let key = t.split('=').next().unwrap_or("").trim();
+            if kv.iter().any(|(k, _)| k == key) {
+                continue; // zastępowany klucz
+            }
+            if t.is_empty() {
+                pending.push(line.to_string());
+                continue;
+            }
+            out.append(&mut pending);
+        }
+        out.push(line.to_string());
+    }
+    if in_sec {
+        flush(&mut out, &mut pending, in_sec, found);
+    } else if !found {
+        if out.last().is_some_and(|l| !l.trim().is_empty()) {
+            out.push(String::new());
+        }
+        out.push(header);
+        for (k, v) in kv {
+            out.push(format!("{k} = {v}"));
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    if let Some(parent) = conf.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = conf.with_extension("syncron-tmp");
+    {
+        use std::io::Write;
+        let mut o = OpenOptions::new();
+        o.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        let mut f = o.open(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        f.sync_all().ok();
+    }
+    fs::rename(&tmp, conf).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 #[cfg(test)]

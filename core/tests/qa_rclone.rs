@@ -188,7 +188,6 @@ fn r1_parse_table() {
 }
 
 #[test]
-#[ignore = "BUG: nazwa konta rclone z polskimi znakami w NFD (macOS) nie jest rozpoznawana jako konto zdalne (znak łączący nie jest alfanumeryczny)"]
 fn r1_parse_nfd_remote_name() {
     use unicode_normalization::UnicodeNormalization;
     let nfd: String = "Dysk Zażółć:folder".nfd().collect();
@@ -790,7 +789,6 @@ fn r2_trash_prefix_filename_is_listed() {
 }
 
 #[test]
-#[ignore = "BUG: stderr zawierający słowo 'locked' w nazwie pliku (np. 'unlocked.txt') przy zwykłym błędzie jest klasyfikowany jako Busy ('plik zajęty')"]
 fn r2_busy_classification_not_fooled_by_filename() {
     let f = fx();
     let j = f.job("fake:", json!({}));
@@ -805,7 +803,6 @@ fn r2_busy_classification_not_fooled_by_filename() {
 }
 
 #[test]
-#[ignore = "BUG: rclone kończy się kodem != 0 z pustym stderr -> pusty komunikat błędu ('lewa strona: ' / 'plik: ')"]
 fn r2_empty_stderr_gives_informative_message() {
     let f = fx();
     let j = f.job("fake:", json!({}));
@@ -833,15 +830,19 @@ fn r2_size_minus_one_for_known_file_must_not_delete_other_side() {
         v.push(json!({"Path": format!("f{i}.txt"), "Size": if i == 3 { -1 } else { st.len() as i64 }, "ModTime": mt, "IsDir": false}));
     }
     f.rules(json!([{ "op": "lsjson", "match": "-R", "stdout": Value::Array(v).to_string() }]));
-    let rep = f.run(&j);
+    // Size=-1 bez MimeType Google Docs to nie dokument bez rozmiaru: listing kończy się błędem (przebieg
+    // przerwany, nic nie usunięte) albo – gdyby przebieg się udał – plik musi zostać po obu stronach.
+    let res = run_job(&j, &f.state, false, false);
     assert!(
-        f.l.join("f3.txt").exists(),
-        "lewy plik f3 usunięty/zakoszony: {rep:?}"
+        f.l.join("f3.txt").exists() && f.cloud.join("f3.txt").exists(),
+        "f3 usunięty/zakoszony: {res:?}"
     );
+    if let Err(e) = res {
+        assert!(e.to_string().contains("f3.txt"), "{e}");
+    }
 }
 
 #[test]
-#[ignore = "BUG: brak ModTime w lsjson -> mtime = 'teraz', więc przy każdym przebiegu plik wygląda na zmieniony i jest kopiowany z powrotem"]
 fn r2_missing_modtime_is_stable_between_runs() {
     let f = fx();
     let j = f.job("fake:", json!({}));
@@ -858,11 +859,11 @@ fn r2_missing_modtime_is_stable_between_runs() {
 }
 
 #[test]
-#[ignore = "BUG: run_rclone nie ma limitu czasu — zawieszony rclone blokuje run_job w nieskończoność"]
 fn r2_hanging_rclone_does_not_block_forever() {
     let f = fx();
     let j = f.job("fake:", json!({}));
     f.rules(json!([{ "op": "lsjson", "sleep": 12, "times": 1 }]));
+    std::env::set_var("SYNCRON_RCLONE_TIMEOUT", "2");
     let (tx, rx) = std::sync::mpsc::channel();
     let state = f.state.clone();
     std::thread::spawn(move || {
@@ -873,6 +874,7 @@ fn r2_hanging_rclone_does_not_block_forever() {
         rx.recv_timeout(Duration::from_secs(5)).is_ok(),
         "run_job nadal czeka na zawieszony rclone po 5 s (brak timeoutu)"
     );
+    std::env::remove_var("SYNCRON_RCLONE_TIMEOUT");
 }
 
 // ======================= RUNDA 3: obciążenie i powtarzalność =======================
