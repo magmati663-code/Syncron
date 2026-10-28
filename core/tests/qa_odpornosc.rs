@@ -245,7 +245,6 @@ fn r2_file_replaced_by_dir_converges() {
 }
 
 #[test]
-#[ignore = "BUG: katalog zamieniony na plik zostawia pusty katalog po drugiej stronie; kopiowanie pliku (rename na katalog) zawodzi w każdym przebiegu"]
 fn r2_dir_replaced_by_file_converges() {
     let (_t, l, r, s) = setup();
     fs::create_dir_all(l.join("d")).unwrap();
@@ -425,7 +424,6 @@ fn r2_dir_replaced_by_symlink_must_not_delete_other_side() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "BUG: kopiowanie podąża za symlinkiem katalogu po stronie docelowej i zapisuje poza folderem synchronizacji"]
 fn r2_copy_through_symlinked_dir_escapes_root() {
     use std::os::unix::fs::symlink;
     let (t, l, r, s) = setup();
@@ -477,7 +475,6 @@ fn r2_deep_tree_syncs_and_converges() {
 }
 
 #[test]
-#[ignore = "BUG: plik lub podkatalog o nazwie .syncron-trash jest po cichu pomijany na każdym poziomie (dane użytkownika nie są synchronizowane, bez ostrzeżenia)"]
 fn r2_user_item_named_like_trash_dir_is_synced_or_reported() {
     let (_t, l, r, s) = setup();
     fs::create_dir_all(l.join("sub/.syncron-trash")).unwrap();
@@ -999,7 +996,6 @@ mod perms {
     }
 
     #[test]
-    #[ignore = "BUG: brak uprawnień do odczytu pliku jest klasyfikowany jako 'plik zajęty' (PermissionDenied = Busy): zła etykieta, 4 ponowienia i ~6 s zwłoki na plik"]
     fn unreadable_source_file_is_error_not_busy() {
         if !as_nobody("perms::unreadable_source_file_is_error_not_busy") {
             return;

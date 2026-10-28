@@ -103,7 +103,6 @@ fn trash_delete_path_dotdot_nie_usuwa_zywych_plikow() {
 }
 
 #[test]
-#[ignore = "BUG T9-02: list_dirs z rel='..' wylistowuje foldery spoza korzenia (ujawnienie struktury dysku)"]
 fn list_dirs_dotdot_nie_wychodzi_poza_korzen() {
     let (t, l, _r, _s) = dirs();
     fs::create_dir_all(t.path().join("sekretny_projekt")).unwrap();
@@ -163,7 +162,6 @@ fn listing_pomija_dowiazania_do_plikow_i_folderow() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "BUG T9-03: zapis przez dowiązanie symboliczne w katalogu docelowym wychodzi poza korzeń (R/sub -> OUT)"]
 fn zapis_nie_podaza_za_symlinkiem_w_folderze_docelowym() {
     use std::os::unix::fs::symlink;
     let (t, l, r, s) = dirs();
@@ -240,7 +238,6 @@ fn sciezka_bezwzgledna_ze_zdalnego_trafia_do_korzenia() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "BUG T9-04: listing zdalny z Path='../escape.txt' powoduje zapis poza korzeniem (brak walidacji komponentów '..')"]
 fn zdalny_listing_z_dotdot_nie_zapisuje_poza_korzeniem() {
     let json = r#"[{"Path":"../escape.txt","Size":9,"ModTime":"2026-10-27T10:00:00Z","IsDir":false},
                    {"Path":"a/../../escape2.txt","Size":9,"ModTime":"2026-10-27T10:00:00Z","IsDir":false}]"#;
@@ -259,7 +256,6 @@ fn zdalny_listing_z_dotdot_nie_zapisuje_poza_korzeniem() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "BUG T9-04: lokalny cel kopiowania/rename z '..' w ścieżce względnej (Location::copy_from/rename) wychodzi poza korzeń"]
 fn copy_from_i_rename_nie_wychodza_poza_korzen() {
     let (t, l, r, _s) = dirs();
     fs::write(r.join("src.txt"), "x").unwrap();
@@ -296,7 +292,7 @@ fn local_full_windows_nie_wychodzi_poza_korzen() {
 }
 
 #[test]
-#[ignore = "BUG T9-05: names::invalid_on_windows nie jest używana — nazwy z '\\', ':', '..' z innych systemów/chmur trafiają na Windows bez walidacji"]
+#[ignore = "DECYZJA T9-05 (niska): names::invalid_on_windows nie jest używana — nazwy z '\\', ':', '..' z innych systemów/chmur trafiają na Windows bez walidacji"]
 fn src_invalid_on_windows_jest_uzywana_w_synchronizacji() {
     let used = ["location.rs", "engine.rs", "plan.rs", "runner.rs"]
         .iter()
@@ -466,7 +462,6 @@ fn ui_nie_laduje_zasobow_zewnetrznych() {
 // ======================================================================
 
 #[test]
-#[ignore = "BUG T9-14: launchd_plist/systemd_unit wstawiają ścieżki bez escapowania XML (&,<) i specyfikatorów systemd (% $)"]
 fn src_cli_pliki_uslug_escapuja_sciezki() {
     let s = repo_file("cli/src/main.rs");
     assert!(

@@ -526,7 +526,6 @@ fn r2_local_full_z_polskimi_znakami_i_pustymi_czesciami() {
 }
 
 #[test]
-#[ignore = "BUG: local_full nie odrzuca '..' - sciezka wzgledna moze wyjsc poza korzen (restore_trash/delete_trash/copy z zewnetrznych danych)"]
 fn r2_local_full_nie_wychodzi_poza_korzen() {
     let root = Path::new("/tmp/korzen");
     let p = local_full(root, "../../etc/passwd");
@@ -556,7 +555,6 @@ fn r2_purge_trash_nie_panikuje_na_obcej_nazwie() {
 }
 
 #[test]
-#[ignore = "BUG: katalog o nazwie pasujacej do is_temp (np. 'notatki.tmp', 'dane.part') jest pomijany razem z zawartoscia - pliki nie sa synchronizowane, bez ostrzezenia"]
 fn r2_katalog_z_koncowka_tmp_jest_synchronizowany() {
     let (_t, l, r, s) = setup();
     fs::create_dir_all(l.join("projekt.tmp")).unwrap();
@@ -566,7 +564,6 @@ fn r2_katalog_z_koncowka_tmp_jest_synchronizowany() {
 }
 
 #[test]
-#[ignore = "BUG: nazwa bliska 255 B: plik tymczasowy '<nazwa>.syncron.tmp' przekracza limit nazwy - kopia nie udaje sie (ENAMETOOLONG), choc sama nazwa jest poprawna"]
 fn r2_nazwa_250_znakow_kopiuje_sie() {
     let (_t, l, r, s) = setup();
     let name = format!("{}.txt", "a".repeat(246)); // 250 B
@@ -639,7 +636,7 @@ fn r2_syncignore_nie_utf8_nie_jest_ignorowany() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "BUG: nazwa pliku nie-UTF-8 (Linux) jest zamieniana na U+FFFD; plik jest wykazany, ale nie da sie go skopiowac ('No such file'), mylacy komunikat"]
+#[ignore = "DECYZJA: nazwa pliku nie-UTF-8 (Linux) jest zamieniana na U+FFFD; plik jest wykazany, ale nie da sie go skopiowac ('No such file'), mylacy komunikat"]
 fn r2_nazwa_nie_utf8() {
     use std::os::unix::ffi::OsStrExt;
     let (_t, l, r, s) = setup();
@@ -666,7 +663,7 @@ fn r2_zmiana_wielkosci_liter_nazwy_propaguje_sie() {
 }
 
 #[test]
-#[ignore = "BUG: invalid_on_windows nie jest nigdzie uzywane w silniku - plik 'a:b.txt' z Linuksa/macOS jest wysylany na Windows i blad jest dopiero z systemu (brak ostrzezenia przed kopiowaniem)"]
+#[ignore = "DECYZJA (niska): invalid_on_windows nie jest nigdzie uzywane w silniku - plik 'a:b.txt' z Linuksa/macOS jest wysylany na Windows i blad jest dopiero z systemu (brak ostrzezenia przed kopiowaniem)"]
 fn r2_invalid_on_windows_nieuzywane() {
     let src = include_str!("../src/engine.rs").to_string()
         + include_str!("../src/location.rs")

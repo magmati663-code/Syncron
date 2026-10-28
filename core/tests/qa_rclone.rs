@@ -378,7 +378,6 @@ fn r2_lsjson_odd_values_do_not_panic() {
 }
 
 #[test]
-#[ignore = "BUG: wpis lsjson bez pola Path trafia na listę z pustą ścieżką (kopiowanie 'korzenia' jako pliku)"]
 fn r2_missing_path_is_not_listed_as_root() {
     let f = fx();
     let j = f.job("fake:", json!({}));
@@ -388,7 +387,6 @@ fn r2_missing_path_is_not_listed_as_root() {
 }
 
 #[test]
-#[ignore = "BUG: ścieżka ze zdalnego listingu z '..' jest doklejana do korzenia lokalnego (path traversal: zapis poza folderem synchronizacji)"]
 fn r2_remote_path_traversal_cannot_escape_local_root() {
     let f = fx();
     let base = f._t.path().to_path_buf();
@@ -775,7 +773,6 @@ fn r2_remote_trash_survives_purge_for_old_files() {
 }
 
 #[test]
-#[ignore = "BUG: plik o nazwie zaczynającej się od '.syncron-trash' (np. .syncron-trashcan.txt) jest pomijany w listingu rclone (starts_with bez granicy ścieżki)"]
 fn r2_trash_prefix_filename_is_listed() {
     let f = fx();
     write(&f.cloud.join(".syncron-trashcan.txt"), "x");
