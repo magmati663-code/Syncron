@@ -539,7 +539,6 @@ fn r2_local_full_nie_wychodzi_poza_korzen() {
 }
 
 #[test]
-#[ignore = "BUG: delete_trash(None, Some(plik)) usuwa CALY kosz (brak obslugi kombinacji)"]
 fn r2_delete_trash_bez_stempla_z_plikiem() {
     let (_t, l, _r, _s) = setup();
     let loc = Location::parse(l.to_str().unwrap());
@@ -550,7 +549,6 @@ fn r2_delete_trash_bez_stempla_z_plikiem() {
 }
 
 #[test]
-#[ignore = "BUG: purge_trash: n[..10] na nazwie z nie-ASCII w kosza => panika (granica znaku)"]
 fn r2_purge_trash_nie_panikuje_na_obcej_nazwie() {
     let (_t, l, _r, _s) = setup();
     let loc = Location::parse(l.to_str().unwrap());

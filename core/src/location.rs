@@ -285,9 +285,11 @@ impl Location {
         }
     }
 
-    /// Kopiuje plik do kosza synchronizacji (przed nadpisaniem).
+    /// Kopiuje plik do kosza synchronizacji (przed nadpisaniem). Nie nadpisuje istniejącej wersji w koszu:
+    /// gdy `stamp` jest już zajęty dla tego pliku, użyty zostaje wolny wariant `stamp-N`.
     pub fn backup(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
-        let trash_rel = format!("{TRASH_DIR}/{stamp}/{rel}");
+        check_stamp(stamp)?;
+        let trash_rel = self.free_trash_path(stamp, rel);
         match self {
             Location::Local(p) => {
                 let dst = local_full(p, &trash_rel);
@@ -302,6 +304,7 @@ impl Location {
     }
 
     /// Przenosi plik do kosza synchronizacji (`stamp` = podfolder), albo usuwa gdy `stamp` jest puste.
+    /// Istniejąca wersja w koszu nigdy nie jest nadpisywana (patrz `backup`).
     pub fn remove(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
         if stamp.is_empty() {
             return match self {
@@ -313,7 +316,8 @@ impl Location {
                 Location::Rclone(_) => rclone_op(&["deletefile", &self.full(rel)]),
             };
         }
-        let trash_rel = format!("{TRASH_DIR}/{stamp}/{rel}");
+        check_stamp(stamp)?;
+        let trash_rel = self.free_trash_path(stamp, rel);
         match self {
             Location::Local(p) => {
                 let src = prepare_target(p, rel, false)?;
@@ -329,6 +333,24 @@ impl Location {
         }
     }
 
+    /// Ścieżka w koszu (`.syncron-trash/<stamp>[-N]/<rel>`), która jeszcze nie istnieje.
+    fn free_trash_path(&self, stamp: &str, rel: &str) -> String {
+        let base = if is_stamp(stamp) { &stamp[..17] } else { stamp };
+        let mut cand = stamp.to_string();
+        for n in 1..10_000u32 {
+            let path = format!("{TRASH_DIR}/{cand}/{rel}");
+            let taken = match self {
+                Location::Local(p) => local_full(p, &path).symlink_metadata().is_ok(),
+                Location::Rclone(_) => self.stat(&path).is_some(),
+            };
+            if !taken {
+                return path;
+            }
+            cand = format!("{base}-{n}");
+        }
+        format!("{TRASH_DIR}/{cand}/{rel}")
+    }
+
     /// Elementy kosza: (znacznik czasu przebiegu, ścieżka pliku, rozmiar).
     pub fn list_trash(&self) -> Result<Vec<(String, String, u64)>, String> {
         let mut out = Vec::new();
@@ -339,10 +361,15 @@ impl Location {
                     return Ok(out);
                 };
                 for st in rd.flatten() {
+                    // obce pliki w korzeniu kosza pomijamy
+                    if !st.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
                     let stamp = st.file_name().to_string_lossy().into_owned();
                     let mut stack = vec![(st.path(), String::new())];
                     while let Some((dir, rel)) = stack.pop() {
-                        for e in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+                        let Ok(rd) = fs::read_dir(&dir) else { continue };
+                        for e in rd.flatten() {
                             let n = e.file_name().to_string_lossy().into_owned();
                             let r = if rel.is_empty() {
                                 n
@@ -385,7 +412,16 @@ impl Location {
 
     /// Przywraca plik z kosza na pierwotne miejsce; jeśli tam jest już plik, przywraca pod nazwą z dopiskiem.
     pub fn restore_trash(&self, stamp: &str, rel: &str) -> Result<String, OpError> {
+        check_stamp(stamp)?;
+        let rel = check_trash_rel(rel)?;
         let from_rel = format!("{TRASH_DIR}/{stamp}/{rel}");
+        if let Location::Local(p) = self {
+            if !local_full(p, &from_rel).is_file() {
+                return Err(OpError::Failed(format!(
+                    "Nie znaleziono wersji w koszu: {stamp}/{rel}"
+                )));
+            }
+        }
         let target = if self.stat(rel).is_some() {
             names::conflict_name(rel, &format!("przywrócono {stamp}"))
         } else {
@@ -406,12 +442,24 @@ impl Location {
         Ok(target)
     }
 
-    /// Usuwa trwale z kosza: jeden plik (`stamp`+`rel`), cały przebieg (`stamp`) albo wszystko.
+    /// Usuwa trwale z kosza: jeden plik (`stamp`+`rel`), cały przebieg (`stamp`) albo wszystko (obie wartości puste).
+    /// Sam `rel` bez `stamp` jest błędem (nie wolno wtedy kasować całego kosza).
     pub fn delete_trash(&self, stamp: Option<&str>, rel: Option<&str>) -> Result<(), OpError> {
         let target = match (stamp, rel) {
-            (Some(s), Some(r)) => format!("{TRASH_DIR}/{s}/{r}"),
-            (Some(s), None) => format!("{TRASH_DIR}/{s}"),
-            _ => TRASH_DIR.to_string(),
+            (Some(s), Some(r)) => {
+                check_stamp(s)?;
+                format!("{TRASH_DIR}/{s}/{}", check_trash_rel(r)?)
+            }
+            (Some(s), None) => {
+                check_stamp(s)?;
+                format!("{TRASH_DIR}/{s}")
+            }
+            (None, Some(_)) => {
+                return Err(OpError::Failed(
+                    "Nie podano znacznika czasu przebiegu: nie można usunąć pliku z kosza".into(),
+                ))
+            }
+            (None, None) => TRASH_DIR.to_string(),
         };
         let file = stamp.is_some() && rel.is_some();
         match self {
@@ -427,10 +475,19 @@ impl Location {
                 }
             }
             Location::Rclone(_) => {
-                if file {
+                let r = if file {
                     rclone_op(&["deletefile", &self.full(&target)])
                 } else {
                     rclone_op(&["purge", &self.full(&target)])
+                };
+                match r {
+                    Err(OpError::Failed(e))
+                        if e.to_lowercase().contains("directory not found")
+                            || e.to_lowercase().contains("object not found") =>
+                    {
+                        Ok(())
+                    }
+                    other => other,
                 }
             }
         }
@@ -483,35 +540,45 @@ impl Location {
         Ok(out)
     }
 
-    /// Usuwa z kosza lokalnego foldery starsze niż `days` dni (nazwa: `YYYY-MM-DD_HHMMSS`).
+    /// Usuwa z kosza foldery przebiegów starsze niż `days` dni (po nazwie `YYYY-MM-DD_HHMMSS[-N]`, nie po
+    /// mtime plików) oraz nadmiarowe wersje (`max_versions` najnowszych na plik). Obce foldery zostają.
     pub fn purge_trash(&self, days: u32, max_versions: u32) {
-        if let Location::Rclone(_) = self {
-            if days > 0 {
-                let _ = run_rclone(&[
-                    "delete",
-                    &self.full(TRASH_DIR),
-                    "--min-age",
-                    &format!("{days}d"),
-                    "--rmdirs",
-                ]);
-            }
+        if max_versions > 0 {
+            self.cap_versions(max_versions as usize);
+        }
+        if days == 0 {
             return;
         }
-        if let Location::Local(p) = self {
-            if max_versions > 0 {
-                self.cap_versions(max_versions as usize);
+        let Some(limit) = cutoff_date(days) else {
+            return; // limit sprzed zakresu dat: nic nie jest wystarczająco stare
+        };
+        let old = |n: &str| is_stamp(n) && n[..10] < *limit.as_str();
+        match self {
+            Location::Local(p) => {
+                if let Ok(rd) = fs::read_dir(local_full(p, TRASH_DIR)) {
+                    for e in rd.flatten() {
+                        let n = e.file_name().to_string_lossy().into_owned();
+                        if e.file_type().map(|t| t.is_dir()).unwrap_or(false) && old(&n) {
+                            let _ = fs::remove_dir_all(e.path());
+                        }
+                    }
+                }
             }
-            if days == 0 {
-                return;
-            }
-            let dir = local_full(p, TRASH_DIR);
-            let limit = chrono::Local::now() - chrono::Duration::days(days as i64);
-            let limit = limit.format("%Y-%m-%d").to_string();
-            if let Ok(rd) = fs::read_dir(dir) {
-                for e in rd.flatten() {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    if n.len() >= 10 && n[..10] < *limit.as_str() {
-                        let _ = fs::remove_dir_all(e.path());
+            Location::Rclone(_) => {
+                let Ok(raw) = run_rclone(&[
+                    "lsjson",
+                    "--dirs-only",
+                    "--no-mimetype",
+                    &self.full(TRASH_DIR),
+                ]) else {
+                    return;
+                };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                    return;
+                };
+                for it in v.as_array().into_iter().flatten() {
+                    if let Some(n) = it["Name"].as_str().filter(|n| old(n)) {
+                        let _ = self.delete_trash(Some(n), None);
                     }
                 }
             }
@@ -519,26 +586,97 @@ impl Location {
     }
 }
 
+/// Czy nazwa to znacznik przebiegu: `YYYY-MM-DD_HHMMSS` z opcjonalnym `-N`.
+fn is_stamp(n: &str) -> bool {
+    let b = n.as_bytes();
+    if b.len() < 17 {
+        return false;
+    }
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+    let base = digits(0..4)
+        && b[4] == b'-'
+        && digits(5..7)
+        && b[7] == b'-'
+        && digits(8..10)
+        && b[10] == b'_'
+        && digits(11..17);
+    base && (b.len() == 17 || (b[17] == b'-' && b.len() > 18 && digits(18..b.len())))
+}
+
+/// Klucz sortowania znaczników: (data, numer kolejny `-N`).
+fn stamp_key(n: &str) -> (String, u64) {
+    if is_stamp(n) {
+        (
+            n[..17].to_string(),
+            n.get(18..).and_then(|x| x.parse().ok()).unwrap_or(0),
+        )
+    } else {
+        (n.to_string(), 0)
+    }
+}
+
+/// Znacznik z interfejsu musi być pojedynczym bezpiecznym komponentem ścieżki (bez `..`, `/`).
+fn check_stamp(stamp: &str) -> Result<(), OpError> {
+    if stamp.contains('/') || stamp.contains('\\') {
+        return Err(OpError::Failed(format!(
+            "Nieprawidłowy znacznik kosza: {stamp}"
+        )));
+    }
+    names::check_rel(stamp)
+        .map_err(|e| OpError::Failed(format!("Nieprawidłowy znacznik kosza: {e}")))
+}
+
+/// Ścieżka pliku w koszu: względna (wiodące `/` są ignorowane), bez `..`.
+fn check_trash_rel(rel: &str) -> Result<&str, OpError> {
+    let rel = rel.trim_start_matches('/');
+    names::check_rel(rel)
+        .map(|_| rel)
+        .map_err(|e| OpError::Failed(format!("Nieprawidłowa ścieżka w koszu: {e}")))
+}
+
+/// Data graniczna (`YYYY-MM-DD`) dla retencji `days` dni; None przy przepełnieniu zakresu dat.
+fn cutoff_date(days: u32) -> Option<String> {
+    let d = chrono::Duration::try_days(days as i64)?;
+    let t = chrono::Local::now().checked_sub_signed(d)?;
+    Some(t.format("%Y-%m-%d").to_string())
+}
+
 impl Location {
-    /// Zostawia w koszu lokalnym tylko `keep` najnowszych wersji każdego pliku.
+    /// Zostawia w koszu tylko `keep` najnowszych wersji każdego pliku (tylko przebiegi o poprawnym znaczniku).
     fn cap_versions(&self, keep: usize) {
         let Ok(items) = self.list_trash() else { return };
         let mut by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (stamp, rel, _) in items {
-            by_file.entry(rel).or_default().push(stamp);
+            if is_stamp(&stamp) {
+                by_file.entry(rel).or_default().push(stamp);
+            }
         }
         for (rel, mut stamps) in by_file {
-            stamps.sort();
+            stamps.sort_by_key(|s| stamp_key(s));
             let extra = stamps.len().saturating_sub(keep);
             for st in stamps.into_iter().take(extra) {
                 let _ = self.delete_trash(Some(&st), Some(&rel));
             }
         }
         if let Location::Local(p) = self {
-            // puste foldery przebiegów
+            // puste foldery przebiegów i ich puste podfoldery
+            fn prune(dir: &Path) {
+                if let Ok(rd) = fs::read_dir(dir) {
+                    for e in rd.flatten() {
+                        if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                            prune(&e.path());
+                        }
+                    }
+                }
+                let _ = fs::remove_dir(dir); // tylko gdy pusty
+            }
             if let Ok(rd) = fs::read_dir(local_full(p, TRASH_DIR)) {
                 for e in rd.flatten() {
-                    let _ = fs::remove_dir(e.path());
+                    if is_stamp(&e.file_name().to_string_lossy())
+                        && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    {
+                        prune(&e.path());
+                    }
                 }
             }
         }
