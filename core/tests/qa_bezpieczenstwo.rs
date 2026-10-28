@@ -348,7 +348,6 @@ fn src_vss_rejestr_nie_lezy_w_przewidywalnym_temp() {
 }
 
 #[test]
-#[ignore = "DECYZJA T9-09: vss::scratch_dir() (nieprzewidywalna nazwa, katalog danych aplikacji) gotowe, ale wywołanie siedzi w location.rs (inny ekspert) — integrator ma zamienić temp_dir().join(\"syncron-vss\")"]
 fn src_vss_temp_nie_jest_przewidywalny() {
     let s = repo_file("core/src/location.rs");
     assert!(

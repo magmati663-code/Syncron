@@ -98,7 +98,7 @@ fn badge_icon(base: &tauri::image::Image<'_>, color: [u8; 3]) -> tauri::image::I
     let (cx, cy, r) = (w as f32 * 0.74, h as f32 * 0.74, w as f32 * 0.24);
     for y in 0..h {
         for x in 0..w {
-            let d = (((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)) as f32).sqrt();
+            let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
             let i = ((y * w + x) * 4) as usize;
             if d <= r * 1.28 && d > r {
                 px[i..i + 4].copy_from_slice(&[255, 255, 255, 255]); // biała obwódka
@@ -253,17 +253,18 @@ fn list_jobs(r: State<Runner>) -> Vec<Job> {
 #[tauri::command]
 fn save_job(r: State<Runner>, job: Job) -> Res<()> {
     job.validate()?;
-    let mut jobs = r.load_jobs();
-    match jobs.iter().position(|j| j.id == job.id) {
-        Some(i) => {
-            if jobs[i].left != job.left || jobs[i].right != job.right {
-                engine::reset_state(r.state_dir(), &job.id).map_err(|e| e.to_string())?;
+    r.update_jobs(|mut jobs| {
+        match jobs.iter().position(|j| j.id == job.id) {
+            Some(i) => {
+                if jobs[i].left != job.left || jobs[i].right != job.right {
+                    engine::reset_state(r.state_dir(), &job.id).map_err(|e| e.to_string())?;
+                }
+                jobs[i] = job.clone();
             }
-            jobs[i] = job.clone();
+            None => jobs.push(job.clone()),
         }
-        None => jobs.push(job.clone()),
-    }
-    r.save_jobs(&jobs).map_err(|e| e.to_string())?;
+        Ok(jobs)
+    })?;
     r.start(job);
     Ok(())
 }
@@ -272,8 +273,7 @@ fn save_job(r: State<Runner>, job: Job) -> Res<()> {
 fn delete_job(r: State<Runner>, id: String) -> Res<()> {
     find_job(&r, &id)?;
     r.stop(&id);
-    let jobs: Vec<Job> = r.load_jobs().into_iter().filter(|j| j.id != id).collect();
-    r.save_jobs(&jobs).map_err(|e| e.to_string())?;
+    r.update_jobs(|jobs| Ok(jobs.into_iter().filter(|j| j.id != id).collect()))?;
     engine::reset_state(r.state_dir(), &id).map_err(|e| e.to_string())
 }
 
@@ -726,19 +726,20 @@ fn import_config(r: State<Runner>, path: String) -> Res<String> {
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("Nie można odczytać pliku importu: {e}"))?;
     let incoming = syncron_core::model::parse_import(&text)?;
-    let mut jobs = r.load_jobs();
-    for j in &incoming {
-        match jobs.iter().position(|x| x.id == j.id) {
-            Some(i) => {
-                if jobs[i].left != j.left || jobs[i].right != j.right {
-                    engine::reset_state(r.state_dir(), &j.id).map_err(|e| e.to_string())?;
+    r.update_jobs(|mut jobs| {
+        for j in &incoming {
+            match jobs.iter().position(|x| x.id == j.id) {
+                Some(i) => {
+                    if jobs[i].left != j.left || jobs[i].right != j.right {
+                        engine::reset_state(r.state_dir(), &j.id).map_err(|e| e.to_string())?;
+                    }
+                    jobs[i] = j.clone();
                 }
-                jobs[i] = j.clone();
+                None => jobs.push(j.clone()),
             }
-            None => jobs.push(j.clone()),
         }
-    }
-    r.save_jobs(&jobs).map_err(|e| e.to_string())?;
+        Ok(jobs)
+    })?;
     for mut j in incoming.iter().cloned() {
         j.enabled = false;
         r.start(j); // wyłączone zadanie tylko zatrzymuje poprzednią wersję

@@ -238,12 +238,7 @@ impl Location {
                                 .vss
                                 .snapshot_path(&src)
                                 .map_err(|n| OpError::Busy(format!("{e}; {n}")))?;
-                            static N: AtomicUsize = AtomicUsize::new(0);
-                            let t = std::env::temp_dir().join("syncron-vss").join(format!(
-                                "{}-{}",
-                                std::process::id(),
-                                N.fetch_add(1, Ordering::SeqCst)
-                            ));
+                            let t = crate::vss::scratch_dir()?.join("kopia");
                             copy_local(&snap, &t, false, &Bandwidth::default())?;
                             source = t.to_string_lossy().into_owned();
                             temp = Some(t);
@@ -259,7 +254,10 @@ impl Location {
                 }
                 let res = rclone_op(&args);
                 if let Some(t) = temp {
-                    let _ = fs::remove_file(t);
+                    let _ = fs::remove_file(&t);
+                    if let Some(d) = t.parent() {
+                        let _ = fs::remove_dir(d);
+                    }
                 }
                 res
             }
