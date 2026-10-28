@@ -26,6 +26,13 @@ Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
 - Reguły: maski (uwzględnij/wyklucz), rozmiar min/max; pomijane pliki tymczasowe (`~$*`, `.tmp`, `.DS_Store`, `Thumbs.db`…).
 - Zabezpieczenia: symulacja, kosz synchronizacji (domyślnie 30 dni), blokada masowego usuwania i pustej strony.
 - Harmonogram: na bieżąco, co N minut, codziennie o godzinie, okno godzin, ręcznie; autostart; praca w zasobniku.
+- **Kosz i wersje plików** (można go wyłączyć per zadanie): zakładka „Kosz i wersje” pokazuje usunięte/nadpisane pliki, z limitem dni i liczby
+  wersji; przywracanie dowolnej wersji jednym kliknięciem.
+- **Warunki i wyzwalacze:** tylko przy zasilaniu sieciowym, tylko w wybranych sieciach Wi-Fi (wykrywanie najlepszym wysiłkiem),
+  uruchomienie po podłączeniu dysku, wybudzeniu z uśpienia i zmianie sieci.
+- **Weryfikacja sum kontrolnych** (BLAKE3) po kopiowaniu lokalnym; chmury weryfikuje rclone.
+- **Szyfrowanie po stronie klienta** (rclone crypt) jako konto chmurowe; **wybór podfolderów** i drzewo różnic w symulacji.
+- Powiadomienia systemowe, kopia/import konfiguracji, interfejs PL/EN, automatyczne aktualizacje (wymagają klucza: SIGNING.md).
 - Historia operacji z eksportem CSV i wyszukiwaniem.
 - Interfejs: jasny/ciemny motyw, kreator zadania w 4 krokach z opisem „jak to będzie działać”, szablony (dwustronna, kopia zapasowa, lustro),
   postęp synchronizacji na żywo, ręczne rozstrzyganie konfliktów („Zachowaj lewą/prawą”), podpowiedzi o niedostępnych folderach.

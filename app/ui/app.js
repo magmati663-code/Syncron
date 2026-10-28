@@ -31,16 +31,18 @@ const hydrateIcons = (root = document) => $$("[data-i]", root).forEach((e) => (e
 $("#logo").innerHTML = icon("sync");
 
 // ---------- pomocnicze ----------
-const STATE = { idle: "Gotowe", running: "Synchronizuję", waiting: "Czeka na pliki", error: "Błąd", blocked: "Zatrzymane", paused: "Wstrzymane", disabled: "Wyłączone" };
+let LANG = "pl"; try { LANG = localStorage.getItem("lang") || "pl"; } catch {}
+const LOCALE = LANG === "en" ? "en-GB" : "pl-PL";
+const STATE = { conditions: "Czeka na warunki", idle: "Gotowe", running: "Synchronizuję", waiting: "Czeka na pliki", error: "Błąd", blocked: "Zatrzymane", paused: "Wstrzymane", disabled: "Wyłączone" };
 const DIRICON = { TwoWay: "both", LeftToRight: "right", RightToLeft: "left" };
-const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString("pl-PL") : "—");
+const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString(LOCALE) : "—");
 function rel(t) {
   if (!t) return "jeszcze nie";
   const d = Math.max(0, Date.now() / 1000 - t);
   if (d < 45) return "przed chwilą";
   if (d < 3600) return `${Math.round(d / 60)} min temu`;
   if (d < 86400) return `${Math.round(d / 3600)} godz. temu`;
-  return new Date(t * 1000).toLocaleDateString("pl-PL");
+  return new Date(t * 1000).toLocaleDateString(LOCALE);
 }
 const schedText = (s) => ({ Manual: "ręcznie", Realtime: "na bieżąco", Interval: `co ${Math.round((s.secs || 0) / 60)} min`, Daily: `codziennie ${String(s.hour).padStart(2, "0")}:${String(s.minute).padStart(2, "0")}` }[s.type] || "");
 function locKind(p) {
@@ -84,6 +86,7 @@ function gotoTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "activity") loadHistory();
   if (name === "accounts") loadRemotes();
+  if (name === "trash") loadTrash();
 }
 $$("nav button").forEach((b) => b.addEventListener("click", () => gotoTab(b.dataset.tab)));
 
@@ -141,8 +144,8 @@ function renderJobs() {
     const rep = st.last, pr = st.progress;
     let stats = st.last_run ? `Ostatnio ${rel(st.last_run)}` : "Jeszcze nie uruchomione";
     if (rep) stats += ` · skopiowano ${rep.copied}, usunięto ${rep.deleted}`;
-    if (st.next_run && state !== "disabled") stats += ` · następne ${new Date(st.next_run * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })}`;
-    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", j.trash_days > 0 && `kosz ${j.trash_days} dni`, vssInfo.supported && j.use_vss !== false && "VSS", (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
+    if (st.next_run && state !== "disabled") stats += ` · następne ${new Date(st.next_run * 1000).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}`;
+    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", (j.trash_days > 0 ? `kosz ${j.trash_days} dni` : "bez kosza"), j.verify && "weryfikacja sum", j.conditions?.ac_only && "tylko zasilanie sieciowe", (j.conditions?.wifi || []).length && "Wi-Fi: " + j.conditions.wifi.join(", "), vssInfo.supported && j.use_vss !== false && "VSS", (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
     let extra = "";
     if (state === "running") {
       const pct = pr && pr.total ? Math.round((pr.done / pr.total) * 100) : null;
@@ -150,6 +153,7 @@ function renderJobs() {
     }
     if (st.error) extra += `<div class="msg">${esc(st.error)}</div>`;
     else if (rep?.blocked) extra += `<div class="msg warn"><b>Zatrzymano ze względów bezpieczeństwa:</b> ${esc(rep.blocked)}. Sprawdź „Symulację”; „Wymuś” pominie blokadę.</div>`;
+    else if (st.state === "conditions" && st.note) extra += `<div class="msg warn">Czeka na warunki: ${esc(st.note)}</div>`;
     else if (rep?.busy.length) extra += `<div class="msg warn">${rep.busy.length} plik(ów) jest zajętych przez inne programy — ponowię automatycznie.${rep.vss_note ? `<br><b>VSS:</b> ${esc(rep.vss_note)}` : ""}</div>`;
     else if (rep?.conflicts.length) extra += `<div class="msg warn">${rep.conflicts.length} konflikt(ów) czeka na decyzję w zakładce „Aktywność”.</div>`;
     const loc = (side, p) => `<div class="loc"><div class="ic">${icon(locKind(p))}</div><div class="t"><b>${side}</b><span title="${esc(p)}">${esc(p)}</span></div></div>`;
@@ -192,21 +196,22 @@ $("#jobs").addEventListener("click", async (e) => {
 
 function showReport(title, r) {
   $("#repTitle").textContent = "Symulacja: " + title;
+  const treeHtml = diffTree(r.planned);
   const rows = r.planned.map(([k, a]) => `<tr><td><span class="kind ${typeof a === "string" && a.startsWith("Delete") ? "warn" : typeof a !== "string" ? "bad" : "ok"}">${ACTION(a)}</span></td><td>${esc(k)}</td></tr>`).join("");
   $("#repBody").innerHTML = `<p>Przeskanowano: <b>${r.scanned_left}</b> plików po lewej i <b>${r.scanned_right}</b> po prawej. Planowanych działań: <b>${r.planned.length}</b>. <span class="muted">Nic nie zostało zmienione.</span></p>` +
     (r.blocked ? `<div class="msg warn"><b>Zabezpieczenie zatrzymałoby synchronizację:</b> ${esc(r.blocked)}</div>` : "") +
     (r.errors.length ? `<div class="msg">${r.errors.map(esc).join("<br>")}</div>` : "") +
-    (rows ? `<div class="scroll" style="margin-top:12px"><table><tbody>${rows}</tbody></table></div>` : '<p class="muted">Obie strony są zgodne — nic do zrobienia.</p>');
+    (rows ? `<div class="scroll" style="margin-top:12px">${treeHtml}</div>` : '<p class="muted">Obie strony są zgodne — nic do zrobienia.</p>');
   $("#report").showModal();
 }
 $("#repClose").onclick = () => $("#report").close();
 
 // ---------- kreator zadania ----------
 const F = () => $("#jobForm").elements;
-const STEP_NAMES = ["Krok 1 z 4 · Lokalizacje", "Krok 2 z 4 · Kierunek i usuwanie", "Krok 3 z 4 · Filtry plików", "Krok 4 z 4 · Harmonogram i podsumowanie"];
+const STEP_NAMES = ["Krok 1 z 5 · Lokalizacje", "Krok 2 z 5 · Kierunek i usuwanie", "Krok 3 z 5 · Filtry i podfoldery", "Krok 4 z 5 · Harmonogram i warunki", "Krok 5 z 5 · Kosz, bezpieczeństwo i podsumowanie"];
 let step = 0;
 let vssInfo = { supported: false, admin: false, elevated_autostart: false };
-const DEFAULT_JOB = { use_vss: true, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
+const DEFAULT_JOB = { use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, triggers: { on_drive: false, on_wake: false, on_network: false }, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
 
 function openEditor(job, tpl) {
   const f = F(); $("#edErr").textContent = "";
@@ -219,7 +224,10 @@ function openEditor(job, tpl) {
   f.sched.value = j.schedule.type;
   f.sched_val.value = j.schedule.type === "Interval" ? Math.round(j.schedule.secs / 60) : j.schedule.type === "Daily" ? `${String(j.schedule.hour).padStart(2, "0")}:${String(j.schedule.minute).padStart(2, "0")}` : j.schedule.type === "Realtime" ? Math.round(j.schedule.poll_secs / 60) : "";
   f.win_from.value = j.window ? j.window[0] : ""; f.win_to.value = j.window ? j.window[1] : "";
-  f.trash_days.value = j.trash_days; f.guard_pct.value = j.guard_pct; f.threads.value = j.threads; f.enabled.checked = j.enabled; f.use_vss.checked = j.use_vss !== false; $("#vssRow").hidden = !vssInfo.supported;
+  f.use_trash.checked = j.trash_days > 0; f.trash_days.value = j.trash_days > 0 ? j.trash_days : 30; f.max_versions.value = j.max_versions || 0; f.verify.checked = !!j.verify;
+  f.ac_only.checked = !!j.conditions?.ac_only; f.wifi.value = (j.conditions?.wifi || []).join("\n");
+  f.on_drive.checked = !!j.triggers?.on_drive; f.on_wake.checked = !!j.triggers?.on_wake; f.on_network.checked = !!j.triggers?.on_network; trashToggle(); $("#tree").innerHTML = "";
+  f.guard_pct.value = j.guard_pct; f.threads.value = j.threads; f.enabled.checked = j.enabled; f.use_vss.checked = j.use_vss !== false; $("#vssRow").hidden = !vssInfo.supported;
   $("#jobForm").dataset.id = j.id || "";
   $$("[data-hint]").forEach((h) => (h.textContent = ""));
   schedHint(); showStep(0); $("#editor").showModal(); f.name.focus();
@@ -229,8 +237,8 @@ function showStep(n) {
   $$(".step").forEach((s) => s.classList.toggle("on", +s.dataset.step === n));
   $$("#steps span").forEach((s, i) => s.classList.toggle("on", i <= n));
   $("#stepName").textContent = STEP_NAMES[n];
-  $("#edBack").hidden = n === 0; $("#edNext").hidden = n === 3; $("#edSave").hidden = n !== 3;
-  if (n === 3) $("#summary").innerHTML = summarize(readJob());
+  $("#edBack").hidden = n === 0; $("#edNext").hidden = n === 4; $("#edSave").hidden = n !== 4;
+  if (n === 4) $("#summary").innerHTML = summarize(readJob());
 }
 function schedHint() {
   const f = F(), t = f.sched.value, l = $("#schedVal");
@@ -258,7 +266,8 @@ function readJob() {
     min_size: f.min_mb.value === "" ? null : Math.round(Number(f.min_mb.value) * 1048576),
     max_size: f.max_mb.value === "" ? null : Math.round(Number(f.max_mb.value) * 1048576),
     schedule, window: from !== null && to !== null ? [from, to] : null, enabled: f.enabled.checked,
-    guard_pct: Number(f.guard_pct.value) || 25, trash_days: Number(f.trash_days.value) || 0, threads: Number(f.threads.value) || 4, use_vss: f.use_vss.checked,
+    guard_pct: Number(f.guard_pct.value) || 25, trash_days: f.use_trash.checked ? Math.max(1, Number(f.trash_days.value) || 30) : 0, max_versions: Number(f.max_versions.value) || 0, verify: f.verify.checked,
+    conditions: { ac_only: f.ac_only.checked, wifi: lines(f.wifi.value) }, triggers: { on_drive: f.on_drive.checked, on_wake: f.on_wake.checked, on_network: f.on_network.checked }, threads: Number(f.threads.value) || 4, use_vss: f.use_vss.checked,
   };
 }
 function summarize(j) {
@@ -268,8 +277,13 @@ function summarize(j) {
   else {
     if (j.no_delete_left) li.push("Po lewej stronie nic nie jest usuwane.");
     if (j.no_delete_right) li.push("Po prawej stronie nic nie jest usuwane.");
-    if (!j.no_delete_left && !j.no_delete_right) li.push(j.trash_days > 0 ? `Usunięte i nadpisane pliki trafiają do kosza na ${j.trash_days} dni.` : "Usunięte pliki są kasowane bez kosza.");
+    if (!j.no_delete_left && !j.no_delete_right) li.push(j.trash_days > 0 ? `Usunięte i nadpisane pliki trafiają do kosza na ${j.trash_days} dni${j.max_versions ? ` (maks. ${j.max_versions} wersji pliku)` : ""}.` : "Kosz wyłączony: usunięte i nadpisane pliki są tracone bez możliwości przywrócenia.");
   }
+  if (j.verify) li.push("Po kopiowaniu sprawdzana jest suma kontrolna pliku.");
+  if (j.conditions?.ac_only) li.push("Zadanie startuje tylko przy zasilaniu sieciowym.");
+  if ((j.conditions?.wifi || []).length) li.push(`Zadanie startuje tylko w sieciach Wi-Fi: ${esc(j.conditions.wifi.join(", "))}.`);
+  const tr = [j.triggers?.on_drive && "po podłączeniu dysku", j.triggers?.on_wake && "po wybudzeniu z uśpienia", j.triggers?.on_network && "po zmianie sieci"].filter(Boolean);
+  if (tr.length) li.push(`Dodatkowo uruchamia się: ${tr.join(", ")}.`);
   li.push(`Uruchamianie: ${schedText(j.schedule)}${j.window ? `, tylko w godzinach ${j.window[0]}:00–${j.window[1]}:00` : ""}.`);
   return `<b>Jak to będzie działać</b><ul>${li.map((x) => `<li>${x}</li>`).join("")}</ul>`;
 }
@@ -302,8 +316,8 @@ function fillRemoteSelects() {
 
 $("#jobForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (step < 3) return $("#edNext").click();
-  const err = validateStep(3); if (err) { $("#edErr").textContent = err; return; }
+  if (step < 4) return $("#edNext").click();
+  const err = validateStep(3) || validateStep(0); if (err) { $("#edErr").textContent = err; return; }
   const job = readJob(); delete job.schedule.bad;
   try { await invoke("save_job", { job }); $("#editor").close(); await refreshJobs(); refreshStatus(); toast("Zadanie zapisane", "ok"); }
   catch (er) { $("#edErr").textContent = String(er); }
@@ -330,7 +344,7 @@ function renderPending() {
   for (const j of jobs) {
     const st = overview.status[j.id], r = st?.last; if (!r) continue;
     r.conflicts.forEach((p) => out.push(`<tr><td><span class="kind warn">konflikt</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted">zmieniono po obu stronach</td><td style="white-space:nowrap"><button class="sm" data-res="left" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj lewą</button> <button class="sm" data-res="right" data-job="${esc(j.id)}" data-path="${esc(p)}">Zachowaj prawą</button></td></tr>`));
-    r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${r.vss_note ? ` · VSS: ${esc(r.vss_note)}` : ""}${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString("pl-PL") + ")" : ""}</td></tr>`));
+    r.busy.forEach((p) => out.push(`<tr><td><span class="kind warn">zajęty</span></td><td><b>${esc(j.name)}</b><br>${esc(p)}</td><td class="muted" colspan="2">otwarty w innym programie — ponowię automatycznie${r.vss_note ? ` · VSS: ${esc(r.vss_note)}` : ""}${st.next_run ? " (" + new Date(st.next_run * 1000).toLocaleTimeString(LOCALE) + ")" : ""}</td></tr>`));
     r.errors.forEach((p) => out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(p)}</td></tr>`));
     if (st.error) out.push(`<tr><td><span class="kind bad">błąd</span></td><td colspan="3"><b>${esc(j.name)}</b><br>${esc(st.error)}</td></tr>`);
   }
@@ -358,6 +372,9 @@ const PROVIDERS = [
   { id: "bitrix", name: "Bitrix24 Dysk", info: "WebDAV: adres, login, hasło", color: "#2fc6f6", mark: "B", kind: "webdav", suggest: "bitrix", extra: { vendor: "other" },
     fields: [["url", "Adres WebDAV (Bitrix24 → Dysk → „Połącz dysk sieciowy”)", "https://firma.bitrix24.pl/company/personal/user/1/disk/path/"], ["user", "Login"], ["pass", "Hasło lub hasło aplikacji", "", "password"]] },
   { id: "webdav", name: "WebDAV / Nextcloud", info: "Adres, login, hasło", color: "#64748b", mark: "W", kind: "webdav", suggest: "webdav", extra: { vendor: "other" }, fields: [["url", "Adres WebDAV"], ["user", "Login"], ["pass", "Hasło", "", "password"]] },
+  { id: "crypt", name: "Szyfrowanie (crypt)", info: "Szyfruje pliki przed wysłaniem", color: "#7c3aed", mark: "🔒", kind: "crypt", suggest: "szyfr", extra: { filename_encryption: "standard", directory_name_encryption: "true" },
+    warn: "Zapisz hasła w bezpiecznym miejscu — bez nich zaszyfrowanych danych nie da się odzyskać. Konto-źródło musi już istnieć (np. gdrive:Szyfrowane).",
+    fields: [["remote", "Konto i folder, w którym trafią zaszyfrowane pliki", "gdrive:Szyfrowane"], ["password", "Hasło szyfrowania", "", "password"], ["password2", "Dodatkowe hasło (sól, zalecane)", "", "password"]] },
   { id: "sftp", name: "SFTP", info: "Serwer, login, hasło", color: "#16a34a", mark: "S", kind: "sftp", suggest: "sftp", fields: [["host", "Serwer"], ["user", "Login"], ["pass", "Hasło", "", "password"], ["port", "Port", "22"]] },
 ];
 let prov = null;
@@ -367,7 +384,7 @@ $("#providers").addEventListener("click", (e) => {
   prov = PROVIDERS.find((p) => p.id === b.dataset.p);
   $$(".prov").forEach((x) => x.classList.toggle("sel", x === b));
   $("#rForm").hidden = false; $("#rName").value = prov.suggest; $("#rMsg").textContent = "";
-  $("#rFields").innerHTML = prov.fields.map(([k, l, ph, ty]) => `<label>${esc(l)}<input data-f="${k}" type="${ty || "text"}" placeholder="${esc(ph || "")}"></label>`).join("") ||
+  $("#rFields").innerHTML = (prov.warn ? `<div class="msg warn">${esc(prov.warn)}</div>` : "") + prov.fields.map(([k, l, ph, ty]) => `<label>${esc(l)}<input data-f="${k}" type="${ty || "text"}" placeholder="${esc(ph || "")}"></label>`).join("") ||
     '<p class="muted">Po kliknięciu „Połącz konto” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>';
 });
 $("#rAdd").onclick = async () => {
@@ -418,3 +435,127 @@ hydrateIcons();
 loadVss();
 loadRemotes(); refreshJobs().then(refreshStatus);
 setInterval(refreshStatus, 2000);
+
+// ---------- drzewo różnic (symulacja) ----------
+function diffTree(planned) {
+  const root = { kids: {}, items: [], n: 0 };
+  for (const [k, a] of planned) {
+    const parts = k.split("/"), file = parts.pop(); let node = root; node.n++;
+    for (const p of parts) { node = node.kids[p] ||= { kids: {}, items: [], n: 0 }; node.n++; }
+    node.items.push([file, a]);
+  }
+  const cls = (a) => (typeof a === "string" && a.startsWith("Delete") ? "warn" : typeof a !== "string" ? "bad" : "ok");
+  const render = (node, name, open) => {
+    const items = node.items.map(([f, a]) => `<div style="padding:2px 0 2px 18px"><span class="kind ${cls(a)}">${ACTION(a)}</span> ${esc(f)}</div>`).join("");
+    const kids = Object.entries(node.kids).sort(([a], [b]) => a.localeCompare(b, LOCALE)).map(([n, c]) => render(c, n, false)).join("");
+    return name === null ? items + kids : `<details ${open ? "open" : ""} style="margin-left:6px"><summary style="cursor:pointer;padding:3px 0"><b>${esc(name)}</b> <span class="muted">(${node.n})</span></summary>${items}${kids}</details>`;
+  };
+  return render(root, null, true);
+}
+
+// ---------- drzewo podfolderów ----------
+const includeList = () => F().include.value.split("\n").map((x) => x.trim()).filter(Boolean);
+async function loadTree(rel, box) {
+  const left = F().left.value.trim();
+  if (!left) { box.innerHTML = '<span class="muted">Najpierw podaj lewą lokalizację (krok 1).</span>'; return; }
+  box.innerHTML = '<span class="muted">Wczytywanie…</span>';
+  try {
+    const dirs = await invoke("list_dirs", { location: left, rel });
+    const inc = includeList();
+    box.innerHTML = dirs.length ? dirs.map((d) => {
+      const path = rel ? rel + "/" + d : d;
+      return `<div class="treerow" data-path="${esc(path)}"><label class="sw" style="padding:4px 8px;margin:2px 0"><input type="checkbox" ${inc.includes(path + "/*") ? "checked" : ""}><span>${esc(d)}</span></label><button type="button" class="sm ghost" data-exp="1">▸</button><div class="kids" style="margin-left:22px"></div></div>`;
+    }).join("") : '<span class="muted">Brak podfolderów.</span>';
+  } catch (e) { box.innerHTML = `<span class="err">${esc(String(e))}</span>`; }
+}
+$("#treeLoad").onclick = () => loadTree("", $("#tree"));
+$("#tree").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-exp]"); if (!b) return;
+  const row = b.closest(".treerow"), kids = row.querySelector(".kids");
+  if (kids.dataset.open) { kids.innerHTML = ""; delete kids.dataset.open; b.textContent = "▸"; }
+  else { kids.dataset.open = "1"; b.textContent = "▾"; loadTree(row.dataset.path, kids); }
+});
+$("#tree").addEventListener("change", (e) => {
+  const cb = e.target.closest("input[type=checkbox]"); if (!cb) return;
+  const pat = cb.closest(".treerow").dataset.path + "/*", set = new Set(includeList());
+  cb.checked ? set.add(pat) : set.delete(pat);
+  F().include.value = [...set].join("\n");
+});
+function trashToggle() { const on = F().use_trash.checked; $$("#trashOpts input").forEach((i) => (i.disabled = !on)); }
+F().use_trash.addEventListener("change", trashToggle);
+
+// ---------- kosz i wersje ----------
+let trashItems = [];
+const stampDate = (st) => { const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(st); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).toLocaleString(LOCALE) : st; };
+const fmtSize = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(2) + " GB");
+function fillTrashJobs() {
+  const cur = $("#trashJob").value;
+  $("#trashJob").innerHTML = jobs.map((j) => `<option value="${esc(j.id)}">${esc(j.name)}</option>`).join("");
+  if (cur && jobs.some((j) => j.id === cur)) $("#trashJob").value = cur;
+}
+async function loadTrash() {
+  fillTrashJobs();
+  const id = $("#trashJob").value, job = jobs.find((j) => j.id === id);
+  if (!job) { $("#trashTbl tbody").innerHTML = '<tr><td colspan="5" class="muted">Brak zadań.</td></tr>'; return; }
+  $("#trashNote").textContent = job.trash_days > 0 ? `Kosz tego zadania jest włączony (${job.trash_days} dni${job.max_versions ? `, maks. ${job.max_versions} wersji pliku` : ""}).` : "Kosz tego zadania jest wyłączony — nowe pliki nie są odkładane. Włącz go w edycji zadania (krok 5).";
+  $("#trashTbl tbody").innerHTML = '<tr><td colspan="5" class="muted">Wczytywanie…</td></tr>';
+  try { trashItems = await invoke("trash_list", { id }); } catch (e) { trashItems = []; $("#trashTbl tbody").innerHTML = `<tr><td colspan="5" class="err">${esc(String(e))}</td></tr>`; return; }
+  renderTrash();
+}
+function renderTrash() {
+  const q = $("#trashQ").value.trim().toLowerCase();
+  const byFile = {};
+  for (const it of trashItems) if (!q || it.path.toLowerCase().includes(q)) (byFile[it.side + "|" + it.path] ||= []).push(it);
+  const rows = Object.values(byFile).sort((a, b) => a[0].path.localeCompare(b[0].path, LOCALE)).flatMap((vs) =>
+    vs.sort((a, b) => b.stamp.localeCompare(a.stamp)).map((it, i) => `<tr><td>${i === 0 ? `<b>${esc(it.path)}</b>${vs.length > 1 ? ` <span class="muted">(${vs.length} wersji)</span>` : ""}` : ""}</td><td>${it.side === "left" ? "lewa" : "prawa"}</td><td>${esc(stampDate(it.stamp))}</td><td>${fmtSize(it.size)}</td>
+      <td style="white-space:nowrap"><button class="sm" data-tr="restore" data-side="${it.side}" data-stamp="${esc(it.stamp)}" data-path="${esc(it.path)}">Przywróć</button> <button class="sm danger" data-tr="del" data-side="${it.side}" data-stamp="${esc(it.stamp)}" data-path="${esc(it.path)}">Usuń</button></td></tr>`));
+  $("#trashTbl tbody").innerHTML = rows.join("") || '<tr><td colspan="5" class="muted">Kosz jest pusty.</td></tr>';
+}
+$("#trashJob").onchange = loadTrash; $("#trashQ").oninput = renderTrash;
+$("#trashTbl").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-tr]"); if (!b) return;
+  const id = $("#trashJob").value, d = b.dataset;
+  try {
+    if (b.dataset.tr === "restore") { const to = await invoke("trash_restore", { id, side: d.side, stamp: d.stamp, path: d.path }); toast("Przywrócono jako: " + to, "ok"); invoke("run_now", { id, force: false }).catch(() => {}); }
+    else if (await ask("Usunąć trwale?", `Wersja pliku „${d.path}” zostanie usunięta bez możliwości przywrócenia.`, "Usuń", true)) { await invoke("trash_delete", { id, side: d.side, stamp: d.stamp, path: d.path }); toast("Usunięto"); }
+  } catch (err) { toast(String(err), "bad"); }
+  loadTrash();
+});
+$("#trashEmpty").onclick = async () => {
+  const id = $("#trashJob").value, job = jobs.find((j) => j.id === id); if (!job) return;
+  if (!(await ask("Opróżnić kosz?", `Cały kosz zadania „${job.name}” (obie strony) zostanie usunięty trwale.`, "Opróżnij", true))) return;
+  try { for (const side of ["left", "right"]) await invoke("trash_delete", { id, side, stamp: null, path: null }); toast("Kosz opróżniony", "ok"); } catch (err) { toast(String(err), "bad"); }
+  loadTrash();
+};
+
+// ---------- ustawienia: powiadomienia, język, aktualizacje, kopia ----------
+(async () => {
+  let st = { notify: true, language: LANG };
+  try { st = await invoke("get_settings"); } catch {}
+  $("#notify").checked = st.notify;
+  $(`input[name=lang][value=${LANG}]`).checked = true;
+  const save = () => invoke("set_settings", { settings: { notify: $("#notify").checked, language: $("input[name=lang]:checked").value } }).catch((e) => toast(String(e), "bad"));
+  $("#notify").onchange = save;
+  $$("input[name=lang]").forEach((r) => (r.onchange = () => { store.set("lang", r.value); save().then(() => location.reload()); }));
+})();
+async function checkUpdates(silent) {
+  const msg = $("#updMsg");
+  try {
+    if (!window.__TAURI__.updater) throw new Error("brak modułu aktualizacji");
+    if (!silent) msg.textContent = "Sprawdzanie…";
+    const u = await window.__TAURI__.updater.check();
+    if (!u) { if (!silent) msg.textContent = "Masz najnowszą wersję."; return; }
+    msg.textContent = "Dostępna wersja " + u.version;
+    if (await ask("Dostępna aktualizacja " + u.version, "Pobrać i zainstalować teraz? Aplikacja uruchomi się ponownie.", "Zainstaluj")) {
+      msg.textContent = "Pobieranie…"; await u.downloadAndInstall(); await window.__TAURI__.process.relaunch();
+    }
+  } catch (e) { if (!silent) msg.textContent = "Nie udało się sprawdzić aktualizacji (brak opublikowanej aktualizacji lub brak sieci)."; }
+}
+$("#checkUpd").onclick = () => checkUpdates(false);
+setTimeout(() => checkUpdates(true), 8000);
+$("#cfgExport").onclick = async () => {
+  try { const p = await dialogApi.save({ defaultPath: "syncpolak-konfiguracja.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (p) toast(`Wyeksportowano zadań: ${await invoke("export_config", { path: p })}`, "ok"); } catch (e) { toast(String(e), "bad"); }
+};
+$("#cfgImport").onclick = async () => {
+  try { const p = await dialogApi.open({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] }); if (p) { toast(`Zaimportowano zadań: ${await invoke("import_config", { path: p })}`, "ok"); await refreshJobs(); } } catch (e) { toast(String(e), "bad"); }
+};

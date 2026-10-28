@@ -25,3 +25,8 @@ Potrzebne konto [Apple Developer Program](https://developer.apple.com/programs/)
 | `APPLE_TEAM_ID` | 10-znakowy identyfikator zespołu |
 
 Po dodaniu sekretów uruchom ponownie workflow „Wydanie”: instalatory zostaną podpisane, a aplikacja macOS dodatkowo notaryzowana.
+
+## Automatyczne aktualizacje
+Aplikacja sprawdza aktualizacje w wydaniach GitHub (`latest.json`). Klucz publiczny jest w `app/src-tauri/tauri.conf.json`;
+do budowy potrzebny jest odpowiadający mu klucz prywatny jako sekret `TAURI_SIGNING_PRIVATE_KEY` (oraz opcjonalnie
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). Bez niego budowa działa, ale aktualizacje się nie publikują.

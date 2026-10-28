@@ -164,3 +164,4 @@ dialog::backdrop{background:rgba(10,15,30,.55);backdrop-filter:blur(2px)}
 #cfYes.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 #cfYes.danger:hover{color:#fff;filter:brightness(1.1)}
 [hidden]{display:none!important}
+.treerow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.treerow>label{flex:1}.treerow .kids{flex-basis:100%}
