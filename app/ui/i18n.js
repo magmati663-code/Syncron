@@ -117,6 +117,7 @@
     "przenieś →": "move →", "← przenieś": "← move", "przeniesienie": "move",
     ") są zawsze pomijane. Wykluczenia możesz też zapisać w pliku": ") are always skipped. You can also keep exclusions in the file",
     "w głównym folderze (jedna maska na linię,": "in the root folder (one mask per line,", "pomija cały folder) — wędruje razem z danymi.": "skips the whole folder) — it travels with the data.",
+    "Brak dostępu do folderu": "No access to the folder", "odmowa dostępu": "access denied", "wymaga decyzji": "needs decision",
     "Zapisano": "Saved", "jeszcze nie": "not yet", "przed chwilą": "just now", "Jeszcze nie uruchomione": "Not run yet",
   };
 
@@ -124,39 +125,45 @@
     [/^Ostatnio (.+)$/, "Last run $1"], [/^(\d+) min temu$/, "$1 min ago"], [/^(\d+) godz\. temu$/, "$1 h ago"],
     [/^skopiowano (\d+), usunięto (\d+)$/, "copied $1, deleted $2"], [/^następne (.+)$/, "next $1"],
     [/^·\s*skopiowano (\d+), usunięto (\d+)$/, "· copied $1, deleted $2"], [/^· następne (.+)$/, "· next $1"],
-    [/^kosz (\d+) dni$/, "trash $1 days"], [/^wyklucza (\d+)$/, "excludes $1"], [/^Wi-Fi: (.+)$/, "Wi-Fi: $1"],
+    [/^kosz (\d+) dni$/, "trash $1 days"], [/^wyklucza (\d+)$/, "excludes $1"], [/^Wi-Fi: (.+)$/, "Wi-Fi: $1", true],
     [/^co (\d+) min$/, "every $1 min"], [/^codziennie (\d{2}:\d{2})$/, "daily $1"],
-    [/^Uruchomiono: (.+)$/, "Started: $1"], [/^(\d+) plik\(ów\) jest zajętych przez inne programy — ponowię automatycznie\.?$/, "$1 file(s) are in use by other programs — I will retry automatically."],
+    [/^Uruchomiono: (.+)$/, "Started: $1", true], [/^(\d+) plik\(ów\) jest zajętych przez inne programy — ponowię automatycznie\.?$/, "$1 file(s) are in use by other programs — I will retry automatically."],
     [/^(\d+) konflikt\(ów\) czeka na decyzję w zakładce „Aktywność”\.$/, "$1 conflict(s) await a decision in the “Activity” tab."],
     [/^Czeka na warunki:$/, "Waiting for conditions:"], [/^Zatrzymano ze względów bezpieczeństwa:$/, "Stopped for safety reasons:"],
-    [/^Symulacja: (.+)$/, "Simulation: $1"], [/^Przeskanowano:$/, "Scanned:"], [/^(\d+) \/ (\d+)$/, "$1 / $2"],
+    [/^Symulacja: (.+)$/, "Simulation: $1", true], [/^Przeskanowano:$/, "Scanned:"], [/^(\d+) \/ (\d+)$/, "$1 / $2"],
     [/^plików po lewej i$/, "files on the left and"], [/^po prawej\. Planowanych działań:$/, "on the right. Planned actions:"],
     [/^Krok (\d) z (\d)/, "Step $1 of $2"], [/^Wyeksportowano zadań: (\d+)$/, "Exported jobs: $1"], [/^Zaimportowano zadań: (\d+)$/, "Imported jobs: $1"],
-    [/^Przywrócono jako: (.+)$/, "Restored as: $1"], [/^Dostępna wersja (.+)$/, "Version $1 available"], [/^Dostępna aktualizacja (.+)$/, "Update $1 available"],
+    [/^Przywrócono jako: (.+)$/, "Restored as: $1", true], [/^Dostępna wersja (.+)$/, "Version $1 available"], [/^Dostępna aktualizacja (.+)$/, "Update $1 available"],
     [/^(\d+) wersji\)?$/, "$1 versions"], [/^\((\d+) wersji\)$/, "($1 versions)"],
-    [/^Wersja pliku „(.+)” zostanie usunięta bez możliwości przywrócenia\.$/, "The version of “$1” will be deleted permanently."],
-    [/^Zadanie „(.+)” zostanie usunięte\. Pliki na dyskach nie zostaną ruszone\.$/, "Job “$1” will be deleted. Files on disks are not touched."],
-    [/^Konto „(.+)” zostanie usunięte z aplikacji \(dane w chmurze zostają\)\.$/, "Account “$1” will be removed from the app (cloud data stays)."],
-    [/^Cały kosz zadania „(.+)” \(obie strony\) zostanie usunięty trwale\.$/, "The whole trash of job “$1” (both sides) will be deleted permanently."],
+    [/^Wersja pliku „(.+)” zostanie usunięta bez możliwości przywrócenia\.$/, "The version of “$1” will be deleted permanently.", true],
+    [/^Zadanie „(.+)” zostanie usunięte\. Pliki na dyskach nie zostaną ruszone\.$/, "Job “$1” will be deleted. Files on disks are not touched.", true],
+    [/^Konto „(.+)” zostanie usunięte z aplikacji \(dane w chmurze zostają\)\.$/, "Account “$1” will be removed from the app (cloud data stays).", true],
+    [/^Cały kosz zadania „(.+)” \(obie strony\) zostanie usunięty trwale\.$/, "The whole trash of job “$1” (both sides) will be deleted permanently.", true],
     [/^Kosz tego zadania jest włączony \((\d+) dni.*\)\.$/, "This job's trash is on ($1 days)."],
     [/^Kosz tego zadania jest wyłączony.*$/, "This job's trash is off — nothing new is stored. Turn it on in the job editor (step 5)."],
-    [/^Zmiany z (.+) i (.+) są przenoszone na drugą stronę\.$/, "Changes from $1 and $2 are carried to the other side."],
-    [/^Pliki z (.+) są kopiowane do (.+)\.$/, "Files from $1 are copied to $2."],
+    [/^Zmiany z (.+) i (.+) są przenoszone na drugą stronę\.$/, "Changes from $1 and $2 are carried to the other side.", true],
+    [/^Pliki z (.+) są kopiowane do (.+)\.$/, "Files from $1 are copied to $2.", true],
     [/^Uruchamianie: (.+)$/, "Runs: $1"], [/^Usunięte i nadpisane pliki trafiają do kosza na (\d+) dni(.*)\.$/, "Deleted and overwritten files go to the trash for $1 days$2."],
     [/^Kosz wyłączony: usunięte i nadpisane pliki są tracone bez możliwości przywrócenia\.$/, "Trash off: deleted and overwritten files are lost with no way to restore them."],
     [/^Po lewej stronie nic nie jest usuwane\.$/, "Nothing is deleted on the left side."], [/^Po prawej stronie nic nie jest usuwane\.$/, "Nothing is deleted on the right side."],
     [/^Nic nie jest nadpisywane ani usuwane — tylko nowe pliki są dodawane\.$/, "Nothing is overwritten or deleted — only new files are added."],
     [/^Po kopiowaniu sprawdzana jest suma kontrolna pliku\.$/, "A checksum is verified after copying."],
     [/^Zadanie startuje tylko przy zasilaniu sieciowym\.$/, "The job starts only on AC power."],
-    [/^Zadanie startuje tylko w sieciach Wi-Fi: (.+)\.$/, "The job starts only on Wi-Fi networks: $1."],
+    [/^Zadanie startuje tylko w sieciach Wi-Fi: (.+)\.$/, "The job starts only on Wi-Fi networks: $1.", true],
     [/^Dodatkowo uruchamia się: (.+)\.$/, "Also runs: $1."],
+    [/^Synchronizuję \((\d+)\)$/, "Syncing ($1)"],
+    [/^\\\\serwer\\udział lub onedrive:$/, "\\\\server\\share or onedrive:", true],
+    [/^Limit prędkości: (.+?) KB\/s w godzinach (.+), poza nimi (.+?) KB\/s\.$/, (a, h, b) => `Speed limit: ${a === "bez limitu" ? "unlimited" : a + " KB/s"} between ${h}, outside those hours: ${b === "bez limitu" ? "unlimited" : b + " KB/s"}.`, true],
+    [/^Limit prędkości: (.+?) KB\/s\.$/, "Speed limit: $1 KB/s.", true],
+    [/^limit (.+?) KB\/s$/, "limit $1 KB/s", true],
+    [/^\\\\serwer\\udział$/, "\\\\server\\share", true],
   ];
 
   // Frazy do podmiany wewnątrz dłuższych tekstów (składanych w kodzie z wielu części).
   const PHRASES = [
     [/Czeka na warunki: komputer działa na baterii \(zadanie wymaga zasilania sieciowego\)/g, "Waiting for conditions: the computer is on battery (the job requires AC power)"],
     [/Czeka na warunki: połączono z siecią Wi-Fi „(.+?)”, która nie jest na liście dozwolonych/g, "Waiting for conditions: connected to Wi-Fi “$1”, which is not on the allowed list"],
-    [/Ostatnio/g, "Last run"], [/min temu/g, "min ago"], [/godz\. temu/g, "h ago"], [/przed chwilą/g, "just now"], [/skopiowano/g, "copied"], [/usunięto/g, "deleted"],
+    [/Ostatnio/g, "Last run"], [/min temu/g, "min ago"], [/godz\. temu/g, "h ago"], [/przed chwilą/g, "just now"], [/skopiowano/g, "copied"], [/usunięto/g, "deleted"], [/przeniesiono/g, "moved"],
     [/następne/g, "next"], [/Jeszcze nie uruchomione/g, "Not run yet"], [/konflikty (\d+)/g, "conflicts $1"],
     [/Zatrzymano ze względów bezpieczeństwa:/g, "Stopped for safety reasons:"],
     [/Sprawdź „Symulację”; „Wymuś” pominie blokadę\./g, "Check “Simulate”; “Force” skips the guard."],
@@ -174,31 +181,75 @@
     [/\bna bieżąco\b/g, "continuously"], [/\bręcznie\b/g, "manually"], [/\bcodziennie (\d)/g, "daily at $1"], [/\bco (\d+) min\b/g, "every $1 min"],
     [/, tylko w godzinach/g, ", only between"], [/\(maks\. (\d+) wersji pliku\)/g, "(max. $1 versions of a file)"],
   ];
-  const tr = (str) => {
+  // --- Ochrona danych użytkownika ---------------------------------------------------------------------
+  // Nazwy zadań, ścieżki, nazwy plików i kont NIE są tłumaczone. Element (lub potomek elementu) z atrybutem data-nt
+  // oraz znane kontenery danych są pomijane. PROT_IN: pomijany jest cały element i jego potomkowie; PROT_OWN: tylko
+  // teksty bezpośrednio w elemencie (potomne <span class="kind"> itp. nadal są tłumaczone).
+  const PROT_IN = "[data-nt], .card .name, .loc .t span, .treerow span, #repBody td:nth-child(2), #repBody summary, " +
+    "#hist td:nth-child(2), #hist td:nth-child(4), #pending td:nth-child(2), #pending td[colspan='3'], #trashTbl td:first-child > b, " +
+    "#remotes .grow > b, #summary li b, .cur, #histJob option:not([value='']), #trashJob option:not([value='']), select[data-remote] option:not([value=''])";
+  const PROT_OWN = "#repBody .scroll div, #repBody details div";
+  // Frazy (PHRASES) tylko w kontenerach z komunikatami aplikacji, nigdy w ogólnym tekście.
+  const MSG = ".msg.warn, .meta, .stats, .pill, #stepName, #summary li, #pending td.muted, #hist td.muted, #repBody > p, #trashTbl .muted, .tile .v";
+  const protectedEl = (el) => !!el && (!!el.closest(PROT_IN) || el.matches(PROT_OWN));
+
+  // Reguły zaczynające się stałym słowem trafiają do kubełka wg pierwszej litery (zamiast ~65 regexów na każdy tekst).
+  const BUCKET = {}, ANY = [];
+  for (const r of RULES) { const m = /^\^([^\\[(.?*+|^$])/.exec(r[0].source); if (m) (BUCKET[m[1]] ||= []).push(r); else ANY.push(r); }
+  const cache = new Map();
+  const tr = (str, msg) => {
     const t = str.trim();
     if (!t) return str;
-    let out = EXACT[t];
-    if (out === undefined) for (const [re, rep] of RULES) if (re.test(t)) { out = t.replace(re, rep); break; }
-    let r = out === undefined ? str : str.replace(t, out);
-    for (const [re, rep] of PHRASES) r = r.replace(re, rep);
+    const key = (msg ? "1" : "0") + str;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    let out = EXACT[t], phrases = msg;
+    if (out === undefined) for (const list of [BUCKET[t[0]] || [], ANY]) {
+      for (const [re, rep, noPhr] of list) {
+        const m = re.exec(t);
+        if (m) { out = typeof rep === "function" ? rep(...m.slice(1)) : t.replace(re, rep); if (noPhr) phrases = false; break; }
+      }
+      if (out !== undefined) break;
+    }
+    let r = out === undefined ? str : str.replace(t, () => out);   // funkcja: bez interpretacji $&, $' itd.
+    if (phrases) for (const [re, rep] of PHRASES) r = r.replace(re, rep);
+    if (cache.size > 4000) cache.clear();
+    cache.set(key, r);
     return r;
   };
+  const fixText = (n) => {
+    const val = n.nodeValue;
+    if (!val || !val.trim()) return;
+    // Najpierw tanie sprawdzenie: jeśli tekst nie zmienia się w żadnym trybie, nie dotykamy DOM (dane użytkownika zwykle tu odpadają).
+    const plain = tr(val, false), full = tr(val, true);
+    if (plain === val && full === val) return;
+    const el = n.parentElement; if (!el || el.tagName === "TEXTAREA" || protectedEl(el)) return;
+    const v = full !== plain && el.closest(MSG) ? full : plain;
+    if (v !== val) n.nodeValue = v;
+  };
+  const fixAttrs = (el) => {
+    if (protectedEl(el)) return;
+    for (const a of ["placeholder", "title"]) { const o = el.getAttribute(a); if (o) { const v = tr(o, false); if (v !== o) el.setAttribute(a, v); } }
+  };
   const walk = (root) => {
+    if (root.nodeType === 3) { fixText(root); return; }
     const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes = []; for (let n = w.nextNode(); n; n = w.nextNode()) nodes.push(n);
-    for (const n of nodes) { const v = tr(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; }
-    if (root.querySelectorAll) for (const el of root.querySelectorAll("[placeholder],[title]"))
-      for (const a of ["placeholder", "title"]) if (el.hasAttribute(a)) { const v = tr(el.getAttribute(a)); if (v !== el.getAttribute(a)) el.setAttribute(a, v); }
+    for (const n of nodes) fixText(n);
+    if (root.matches && root.matches("[placeholder],[title]")) fixAttrs(root);
+    if (root.querySelectorAll) for (const el of root.querySelectorAll("[placeholder],[title]")) fixAttrs(el);
   };
   const start = () => {
     walk(document.body);
-    new MutationObserver((ms) => {
+    const obs = new MutationObserver((ms) => {
       for (const m of ms) {
-        if (m.type === "characterData") { const v = tr(m.target.nodeValue); if (v !== m.target.nodeValue) m.target.nodeValue = v; }
-        else if (m.type === "attributes") { const v = tr(m.target.getAttribute(m.attributeName)); if (v !== m.target.getAttribute(m.attributeName)) m.target.setAttribute(m.attributeName, v); }
-        else for (const n of m.addedNodes) { if (n.nodeType === 3) { const v = tr(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; } else if (n.nodeType === 1) walk(n); }
+        if (m.type === "characterData") fixText(m.target);
+        else if (m.type === "attributes") fixAttrs(m.target);
+        else for (const n of m.addedNodes) if (n.nodeType === 3 || n.nodeType === 1) walk(n);
       }
-    }).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title"] });
+      obs.takeRecords();   // własne zmiany nie wywołują kolejnych przebiegów
+    });
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title"] });
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
   document.title = "Syncron";
