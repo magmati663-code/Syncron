@@ -475,7 +475,7 @@ fn r2_deep_new_directories_on_move() {
 }
 
 #[test]
-#[ignore = "BUG T5-02: zmiana samej wielkości liter w nazwie pliku nie jest propagowana (klucz = małe litery)"]
+#[ignore = "DECYZJA: T5-02 - klucz = małe litery (zmiana samej wielkości liter nie jest propagowana, jak w rsync/Dropbox na FS bez rozróżniania wielkości)"]
 fn r2_case_only_rename_propagates() {
     // plik.TXT -> plik.txt: klucz (małe litery) identyczny, więc silnik nie widzi zmiany
     let (_t, l, r, s) = setup();
@@ -1055,7 +1055,7 @@ fn r3_matrix_collisions_only_add_and_no_loss() {
 }
 
 #[test]
-#[ignore = "DO WERYFIKACJI T5-03: nowy plik po obu stronach o tym samym rozmiarze i mtime, lecz innej treści, jest uznany za identyczny (nawet z verify)"]
+#[ignore = "DECYZJA: T5-03 - porównanie po rozmiarze i mtime jak w rsync (treści nie czytamy); opis przy plan::same"]
 fn r2_new_file_on_both_sides_same_meta_different_content() {
     let (_t, l, r, s) = setup();
     put(&l, "n.txt", "ccc", T0);

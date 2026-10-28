@@ -298,9 +298,13 @@ fn r1_end_to_end_roundtrip() {
     // przeniesienie -> moveto
     fs::create_dir_all(f.l.join("Nowy")).unwrap();
     fs::rename(f.l.join("Łódź.txt"), f.l.join("Nowy/Łódź 2.txt")).unwrap();
-    let rep = f.run(&j);
-    assert_eq!(rep.moved, 1, "{rep:?}");
+    // cel rclone nie ma hasha: przeniesienia nie zgadujemy (T1-01), robimy kopiowanie + usunięcie
+    let mut j2 = j.clone();
+    j2.guard_pct = 100;
+    let rep = f.run(&j2);
+    assert_eq!((rep.moved, rep.copied, rep.deleted), (0, 1, 1), "{rep:?}");
     assert!(f.cloud.join("Mój folder/ąę/Nowy/Łódź 2.txt").exists());
+    assert!(!f.cloud.join("Mój folder/ąę/Łódź.txt").exists());
 
     // usunięcie -> kosz po prawej
     for i in 0..6 {

@@ -60,8 +60,13 @@ pub type Tree = BTreeMap<String, Meta>;
 /// Tolerancja mtime (FAT/SMB zaokrąglają do 2 s).
 const TOL: i64 = 2;
 
+/// Czy dwie wersje pliku uznajemy za identyczne: ten sam rozmiar i mtime w tolerancji.
+///
+/// DECYZJA (T5-03): nie czytamy treści. Nowe pliki po obu stronach o tym samym rozmiarze
+/// i czasie (lecz innej treści) są uznane za identyczne - tak samo jak w rsync (domyślnie
+/// „quick check”). Weryfikacja hashem dotyczy kopiowania (opcja `verify`), nie porównania.
 pub fn same(a: &Meta, b: &Meta) -> bool {
-    a.size == b.size && (a.mtime - b.mtime).abs() <= TOL
+    a.size == b.size && a.mtime.abs_diff(b.mtime) <= TOL as u64
 }
 
 /// Zmiana względem migawki: nowy, zmieniony lub usunięty.
