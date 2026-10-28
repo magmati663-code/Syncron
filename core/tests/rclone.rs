@@ -81,11 +81,14 @@ fn local_and_rclone_backend_roundtrip() {
         "{trash:?}"
     );
 
-    // przeniesienie pliku po lewej: po prawej `moveto`
+    // przeniesienie pliku po lewej: dla rclone nie zgadujemy przeniesień (brak sum kontrolnych), więc
+    // plik jest kopiowany w nowe miejsce i usuwany ze starego (blokada masowego usuwania wyłączona)
     fs::create_dir_all(l.join("Nowy")).unwrap();
     fs::rename(l.join("Łódź.txt"), l.join("Nowy/Łódź przeniesiona.txt")).unwrap();
-    let rep = run_job(&job, &s, false, false).unwrap();
-    assert_eq!(rep.moved, 1, "{rep:?}");
+    let mut job_free = job.clone();
+    job_free.guard_pct = 100;
+    let rep = run_job(&job_free, &s, false, false).unwrap();
+    assert_eq!((rep.moved, rep.copied, rep.deleted), (0, 1, 1), "{rep:?}");
     assert!(r.join("Nowy/Łódź przeniesiona.txt").exists() && !r.join("Łódź.txt").exists());
 
     // usunięcie po lewej: po prawej plik trafia do kosza (przy kilku plikach, żeby nie zadziałała blokada)
