@@ -461,7 +461,9 @@ fn r2_file_replaced_by_symlink_is_recoverable_from_trash_or_kept() {
 fn r2_deep_tree_syncs_and_converges() {
     let (_t, l, r, s) = setup();
     let mut p = l.clone();
-    for i in 0..120 {
+    // macOS ma limit ścieżki 1024 B (Linux 4096), więc tam drzewo jest płytsze
+    let depth = if cfg!(target_os = "macos") { 30 } else { 120 };
+    for i in 0..depth {
         p.push(format!("poziom_{i:03}_żółć"));
     }
     fs::create_dir_all(&p).unwrap();

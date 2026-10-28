@@ -779,11 +779,15 @@ fn prepare_target(root: &Path, rel: &str, create: bool) -> Result<PathBuf, OpErr
 }
 
 /// Przejściowe błędy tworzenia folderu/pliku w folderze, który właśnie jest usuwany przez inny wątek
-/// (na Windows folder w stanie „delete pending” daje „odmowa dostępu” zamiast „nie znaleziono”).
+/// (na Windows folder w stanie „delete pending” daje „odmowa dostępu”, a na macOS „nieprawidłowy argument”
+/// zamiast „nie znaleziono”).
 fn transient_dir_error(e: &io::Error) -> bool {
     matches!(
         e.kind(),
-        io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+        io::ErrorKind::AlreadyExists
+            | io::ErrorKind::NotFound
+            | io::ErrorKind::PermissionDenied
+            | io::ErrorKind::InvalidInput
     )
 }
 
