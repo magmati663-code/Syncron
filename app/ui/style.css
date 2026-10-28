@@ -26,7 +26,7 @@ nav{display:flex;flex-direction:column;gap:3px}
 nav button{display:flex;align-items:center;gap:11px;text-align:left;border:0;background:none;color:var(--muted);padding:10px 12px;border-radius:10px;cursor:pointer;font:inherit;font-weight:600;position:relative}
 nav button:hover{background:var(--panel2);color:var(--text)}
 nav button.active{background:var(--accent-soft);color:var(--accent)}
-.badge{margin-left:auto;background:var(--bad);color:#fff;border-radius:99px;font-size:11px;font-weight:700;padding:1px 7px}
+.badge{margin-left:auto;background:#b91c1c;color:#fff;border-radius:99px;font-size:11px;font-weight:700;padding:1px 7px}
 .grow{flex:1}
 .side-foot{display:flex;flex-direction:column;gap:8px}
 .ver{color:var(--muted);font-size:12px;text-align:center}
@@ -132,9 +132,12 @@ dialog{border:1px solid var(--line);border-radius:18px;background:var(--panel);c
 dialog[open]{display:flex;flex-direction:column;animation:pop .16s ease}
 @keyframes pop{from{opacity:0;transform:scale(.97)}}
 dialog::backdrop{background:rgba(10,15,30,.55);backdrop-filter:blur(2px)}
-.dh{padding:20px 24px 14px;border-bottom:1px solid var(--line)}
-.db{padding:20px 24px;overflow:auto;flex:1}
-.df{padding:14px 24px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;background:var(--panel2)}
+.dh{padding:20px 24px 14px;border-bottom:1px solid var(--line);flex:none}
+.db{padding:20px 24px;overflow:auto;flex:1 1 auto;min-height:0}
+.df{padding:14px 24px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;background:var(--panel2);flex:none}
+/* kreator: formularz jest kontenerem flex, więc tylko .db się przewija, a stopka zawsze jest widoczna */
+#jobForm{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
+#editor{height:min(700px,92vh)}
 .steps{display:flex;gap:6px;margin-top:14px}
 .steps span{flex:1;height:5px;border-radius:9px;background:var(--line)}
 .steps span.on{background:linear-gradient(90deg,var(--accent),var(--accent2))}
@@ -146,7 +149,9 @@ dialog::backdrop{background:rgba(10,15,30,.55);backdrop-filter:blur(2px)}
 .choice{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .choice.c2{grid-template-columns:repeat(2,1fr)}
 .opt{border:1.5px solid var(--line);border-radius:12px;padding:12px;cursor:pointer;display:flex;flex-direction:column;gap:3px;color:var(--text);background:var(--panel2)}
-.opt input{display:none}
+.opt{position:relative}
+.opt input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.opt:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .opt b{font-size:14px}.opt span{font-size:12px;color:var(--muted);font-weight:500}
 .opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
 .sw{flex-direction:row;align-items:flex-start;gap:12px;color:var(--text);font-size:14px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);font-weight:600}
@@ -161,7 +166,7 @@ dialog::backdrop{background:rgba(10,15,30,.55);backdrop-filter:blur(2px)}
 .toast{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);padding:11px 16px;border-radius:12px;box-shadow:var(--shadow);max-width:380px;animation:fade .2s}
 .toast.ok{border-left-color:var(--ok)}.toast.bad{border-left-color:var(--bad)}
 @media (max-width:900px){.route{grid-template-columns:1fr}.dir{transform:rotate(90deg)}.g2,.choice{grid-template-columns:1fr}aside{width:70px}.brand span:last-child,nav button span.l,.ver,.side-foot .l{display:none}}
-#cfYes.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+#cfYes.danger{background:#b91c1c;border-color:#b91c1c;color:#fff}
 #cfYes.danger:hover{color:#fff;filter:brightness(1.1)}
 [hidden]{display:none!important}
 .treerow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.treerow>label{flex:1}.treerow .kids{flex-basis:100%}
