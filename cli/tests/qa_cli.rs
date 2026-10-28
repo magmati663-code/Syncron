@@ -82,7 +82,8 @@ fn snap(root: &Path) -> BTreeMap<String, (bool, Vec<u8>, std::time::SystemTime)>
                 .to_string_lossy()
                 .into_owned();
             if md.is_dir() {
-                m.insert(rel, (true, vec![], md.modified().unwrap()));
+                // czas modyfikacji folderu pomijamy: NTFS aktualizuje go z opóźnieniem przy samym odczycie
+                m.insert(rel, (true, vec![], std::time::UNIX_EPOCH));
                 walk(base, &e.path(), m);
             } else {
                 m.insert(
