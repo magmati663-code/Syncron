@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use syncpolak_core::engine::{self, HistoryRow, Report};
+use syncpolak_core::engine::{self, HistoryRow, Report, TrashItem};
 use syncpolak_core::location::run_rclone;
 use syncpolak_core::model::Job;
 use syncpolak_core::runner::{Runner, Status};
@@ -289,6 +289,208 @@ async fn set_elevated_autostart(enable: bool) -> Res<()> {
         .map_err(|e| e.to_string())?
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct Settings {
+    #[serde(default = "yes")]
+    notify: bool,
+    #[serde(default = "pl")]
+    language: String,
+}
+fn yes() -> bool {
+    true
+}
+fn pl() -> String {
+    "pl".into()
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            notify: true,
+            language: pl(),
+        }
+    }
+}
+
+fn settings_path(r: &Runner) -> std::path::PathBuf {
+    r.state_dir().join("settings.json")
+}
+fn load_settings(r: &Runner) -> Settings {
+    std::fs::read_to_string(settings_path(r))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_settings(r: State<Runner>) -> Settings {
+    load_settings(&r)
+}
+
+#[tauri::command]
+fn set_settings(r: State<Runner>, settings: Settings) -> Res<()> {
+    std::fs::write(
+        settings_path(&r),
+        serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn find_job(r: &Runner, id: &str) -> Res<Job> {
+    r.load_jobs()
+        .into_iter()
+        .find(|j| j.id == id)
+        .ok_or_else(|| "brak zadania".to_string())
+}
+
+#[tauri::command]
+async fn trash_list(r: State<'_, Runner>, id: String) -> Res<Vec<TrashItem>> {
+    let job = find_job(&r, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::trash_list(&job).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn trash_restore(
+    r: State<'_, Runner>,
+    id: String,
+    side: String,
+    stamp: String,
+    path: String,
+) -> Res<String> {
+    let job = find_job(&r, &id)?;
+    let runner = r.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        runner
+            .with_job_lock(&job.id, || {
+                engine::trash_restore(&job, &side, &stamp, &path)
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn trash_delete(
+    r: State<'_, Runner>,
+    id: String,
+    side: String,
+    stamp: Option<String>,
+    path: Option<String>,
+) -> Res<()> {
+    let job = find_job(&r, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::trash_delete(&job, &side, stamp.as_deref(), path.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Podfoldery folderu `rel` w lokalizacji `location` (wybór podfolderów w kreatorze).
+#[tauri::command]
+async fn list_dirs(location: String, rel: String) -> Res<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::list_dirs(&location, &rel).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Kopia konfiguracji zadań do pliku JSON (bez haseł i tokenów kont chmurowych).
+#[tauri::command]
+fn export_config(r: State<Runner>, path: String) -> Res<usize> {
+    let jobs = r.load_jobs();
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(jobs.len())
+}
+
+/// Import zadań z pliku: zadania o tym samym identyfikatorze są zastępowane, reszta dopisywana.
+#[tauri::command]
+fn import_config(r: State<Runner>, path: String) -> Res<usize> {
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let incoming: Vec<Job> = serde_json::from_str(&text)
+        .map_err(|e| format!("to nie jest plik konfiguracji SyncPolak: {e}"))?;
+    let mut jobs = r.load_jobs();
+    for j in &incoming {
+        match jobs.iter().position(|x| x.id == j.id) {
+            Some(i) => jobs[i] = j.clone(),
+            None => jobs.push(j.clone()),
+        }
+    }
+    r.save_jobs(&jobs).map_err(|e| e.to_string())?;
+    for j in incoming.iter() {
+        r.start(j.clone());
+    }
+    Ok(incoming.len())
+}
+
+/// Wątek powiadomień systemowych: nowy błąd, zatrzymanie przez zabezpieczenie, nowy konflikt.
+fn spawn_notifier(app: tauri::AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+    std::thread::spawn(move || {
+        let mut seen: HashMap<String, (String, usize)> = HashMap::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            let r = app.state::<Runner>();
+            let st = load_settings(&r);
+            let en = st.language == "en";
+            let jobs = r.load_jobs();
+            for (id, s) in r.status() {
+                let name = jobs
+                    .iter()
+                    .find(|j| j.id == id)
+                    .map(|j| j.name.clone())
+                    .unwrap_or(id.clone());
+                let conflicts = s.last.as_ref().map(|l| l.conflicts.len()).unwrap_or(0);
+                let prev = seen.insert(id.clone(), (s.state.clone(), conflicts));
+                let Some((pstate, pconf)) = prev else {
+                    continue;
+                };
+                if !st.notify {
+                    continue;
+                }
+                let msg = if s.state != pstate && s.state == "error" {
+                    Some(if en {
+                        format!("Error: {}", s.error.clone().unwrap_or_default())
+                    } else {
+                        format!("Błąd: {}", s.error.clone().unwrap_or_default())
+                    })
+                } else if s.state != pstate && s.state == "blocked" {
+                    Some(if en {
+                        "Stopped by a safety check — review the simulation.".to_string()
+                    } else {
+                        "Zatrzymano przez zabezpieczenie — sprawdź symulację.".to_string()
+                    })
+                } else if conflicts > pconf {
+                    Some(if en {
+                        format!("{conflicts} file(s) in conflict need a decision.")
+                    } else {
+                        format!("Konflikty do rozstrzygnięcia: {conflicts}.")
+                    })
+                } else {
+                    None
+                };
+                if let Some(body) = msg {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title(format!("SyncPolak — {name}"))
+                        .body(body)
+                        .show();
+                }
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn rclone_version() -> Res<String> {
     run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string())
@@ -324,6 +526,9 @@ fn main() {
             show_main(app)
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -337,7 +542,9 @@ fn main() {
             vss::cleanup_stale(); // migawki pozostawione po awarii
             let runner = Runner::new(dir);
             runner.start_all();
+            runner.start_monitor(); // dysk podłączony / wybudzenie / zmiana sieci
             app.manage(runner);
+            spawn_notifier(app.handle().clone());
 
             let show = MenuItem::with_id(app, "show", "Otwórz SyncPolak", true, None::<&str>)?;
             let pause = MenuItem::with_id(
@@ -403,6 +610,14 @@ fn main() {
             test_remote,
             rclone_version,
             vss_status,
+            get_settings,
+            set_settings,
+            trash_list,
+            trash_restore,
+            trash_delete,
+            list_dirs,
+            export_config,
+            import_config,
             restart_elevated,
             set_elevated_autostart
         ])

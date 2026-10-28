@@ -78,12 +78,25 @@ jobs:
             echo "APPLE_TEAM_ID=$S_TEAM"
           } >> "$GITHUB_ENV"
           echo "Podpis i notaryzacja macOS włączone."
+      - name: Artefakty automatycznych aktualizacji (jeśli podano klucz)
+        shell: bash
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$UPDATER_KEY" ]; then
+            node -e "const f='app/src-tauri/tauri.conf.json',c=JSON.parse(require('fs').readFileSync(f,'utf8'));c.bundle.createUpdaterArtifacts=true;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+            echo "Aktualizacje automatyczne włączone."
+          else
+            echo "Brak sekretu TAURI_SIGNING_PRIVATE_KEY: bez artefaktów aktualizacji."
+          fi
       - name: Zależności Node (Tauri CLI)
         working-directory: app
         run: npm install
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tagName: v__VERSION__

@@ -3,21 +3,59 @@
   "productName": "SyncPolak",
   "version": "0.3.0",
   "identifier": "pl.syncpolak.app",
-  "build": { "frontendDist": "../ui" },
+  "build": {
+    "frontendDist": "../ui"
+  },
   "app": {
     "withGlobalTauri": true,
     "windows": [
-      { "label": "main", "title": "SyncPolak", "width": 1040, "height": 700, "minWidth": 860, "minHeight": 560 }
+      {
+        "label": "main",
+        "title": "SyncPolak",
+        "width": 1040,
+        "height": 700,
+        "minWidth": 860,
+        "minHeight": 560
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "category": "Utility",
     "shortDescription": "Synchronizacja folderów, dysków sieciowych i chmur",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "resources": ["bin/*"],
-    "windows": { "nsis": { "languages": ["Polish", "English"], "displayLanguageSelector": true } }
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "bin/*"
+    ],
+    "windows": {
+      "nsis": {
+        "languages": [
+          "Polish",
+          "English"
+        ],
+        "displayLanguageSelector": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA1OTJCRDlEOUI0NzZCNTgKUldSWWEwZWJuYjJTQlozdnp6eGg0b0JvQTI3SGdkaEFOOC9laUtNNVcwLzJiWEpBelVkK0Jlbm8K",
+      "endpoints": [
+        "https://github.com/magmati663-code/test/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
