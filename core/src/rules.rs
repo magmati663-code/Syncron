@@ -38,11 +38,12 @@ impl Default for RuleSet {
 /// by pozostałe linie nadal działały (zamiast ignorowania całego pliku).
 pub fn decode_text(bytes: &[u8]) -> String {
     let utf16 = |b: &[u8], le: bool| {
-        let units = b.chunks_exact(2).map(|c| {
+        let units = (0..b.len() / 2).map(|i| {
+            let pair = [b[2 * i], b[2 * i + 1]];
             if le {
-                u16::from_le_bytes([c[0], c[1]])
+                u16::from_le_bytes(pair)
             } else {
-                u16::from_be_bytes([c[0], c[1]])
+                u16::from_be_bytes(pair)
             }
         });
         char::decode_utf16(units)
