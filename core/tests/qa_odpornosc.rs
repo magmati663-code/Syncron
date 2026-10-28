@@ -861,6 +861,36 @@ fn r3_two_overwrites_in_same_second_keep_both_old_versions_in_trash() {
 }
 
 #[test]
+#[ignore = "BUG T3-07: remove_empty_parents (rmdir) ściga się z create_dir_all+tmp w copy_local; sporadyczne No such file or directory"]
+fn r3_delete_and_add_in_same_dir_parallel_has_no_spurious_errors() {
+    // regresja po poprawce „sprzątanie pustych katalogów”: usunięcie ostatniego pliku w katalogu
+    // (rmdir) nie może ścigać się z równoległym kopiowaniem nowego pliku do tego katalogu
+    for round in 0..5 {
+        let (_t, l, r, s) = setup();
+        for d in 0..60 {
+            fs::create_dir_all(l.join(format!("d{d}"))).unwrap();
+            fs::write(l.join(format!("d{d}/stary.txt")), format!("s{d}")).unwrap();
+            fs::write(l.join(format!("keep{d}.txt")), "k").unwrap();
+        }
+        let mut j = job(&l, &r, "TwoWay");
+        j.threads = 8;
+        j.guard_pct = 100;
+        run(&j, &s);
+        for d in 0..60 {
+            fs::remove_file(l.join(format!("d{d}/stary.txt"))).unwrap();
+            fs::write(l.join(format!("d{d}/nowy.txt")), format!("n{d}-{round}")).unwrap();
+        }
+        let rep = run(&j, &s);
+        assert!(
+            rep.errors.is_empty() && rep.busy.is_empty(),
+            "runda {round}: wyścig sprzątania katalogów z kopiowaniem: {:?}",
+            &rep.errors[..rep.errors.len().min(3)]
+        );
+        assert_eq!(snap(&l), snap(&r));
+    }
+}
+
+#[test]
 fn r3_repeated_runs_are_idempotent_after_heal() {
     let (_t, l, r, s) = setup();
     for i in 0..25 {
