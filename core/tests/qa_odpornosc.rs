@@ -861,7 +861,6 @@ fn r3_two_overwrites_in_same_second_keep_both_old_versions_in_trash() {
 }
 
 #[test]
-#[ignore = "BUG T3-07: remove_empty_parents (rmdir) ściga się z create_dir_all+tmp w copy_local; sporadyczne No such file or directory"]
 fn r3_delete_and_add_in_same_dir_parallel_has_no_spurious_errors() {
     // regresja po poprawce „sprzątanie pustych katalogów”: usunięcie ostatniego pliku w katalogu
     // (rmdir) nie może ścigać się z równoległym kopiowaniem nowego pliku do tego katalogu

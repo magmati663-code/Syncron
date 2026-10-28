@@ -305,7 +305,7 @@ impl Location {
             Location::Local(p) => {
                 let dst = local_full(p, &trash_rel);
                 if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)?;
+                    ensure_dir(parent)?;
                 }
                 fs::copy(local_full(p, rel), dst)?;
                 Ok(())
@@ -442,7 +442,7 @@ impl Location {
             Location::Local(p) => {
                 let dst = local_full(p, &target);
                 if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)?;
+                    ensure_dir(parent)?;
                 }
                 fs::copy(local_full(p, &from_rel), dst)?;
             }
@@ -778,6 +778,28 @@ fn prepare_target(root: &Path, rel: &str, create: bool) -> Result<PathBuf, OpErr
     resolve_local(root, rel, false, create)
 }
 
+/// `create_dir_all` odporne na wyścig z równoległym sprzątaniem pustych folderów (`remove_empty_parents`):
+/// między utworzeniem a sprawdzeniem folder mógł zniknąć, co daje przejściowe `AlreadyExists`/`NotFound`.
+fn ensure_dir(path: &Path) -> io::Result<()> {
+    let mut last = None;
+    for _ in 0..8 {
+        match fs::create_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
+                ) =>
+            {
+                last = Some(e);
+                sleep(Duration::from_millis(2));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("nie można utworzyć folderu")))
+}
+
 /// Po usunięciu pliku sprząta puste foldery nadrzędne aż do korzenia (samego korzenia nigdy).
 fn remove_empty_parents(root: &Path, rel: &str) {
     let mut parts: Vec<&str> = rel.split('/').collect();
@@ -938,7 +960,7 @@ fn create_new_tmp(dst: &Path) -> io::Result<(File, PathBuf)> {
 
 fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
+        ensure_dir(parent)?;
     }
     let tmp_path = std::cell::RefCell::new(None::<PathBuf>);
     let mut inp = open_shared(src)?;
@@ -952,7 +974,7 @@ fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Resul
                 Err(e) if e.kind() == io::ErrorKind::NotFound && tries < 8 => {
                     tries += 1;
                     if let Some(parent) = dst.parent() {
-                        fs::create_dir_all(parent)?;
+                        ensure_dir(parent)?;
                     }
                 }
                 other => break other?,
