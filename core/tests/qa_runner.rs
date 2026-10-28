@@ -438,7 +438,7 @@ fn r1_stop_all_ends_threads_quickly() {
 }
 
 // ---- warunki (fałszywe iwgetid w PATH; tylko Linux) ----
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn r1_conditions_block_background_run_but_not_manual() {
     use std::os::unix::fs::PermissionsExt;
