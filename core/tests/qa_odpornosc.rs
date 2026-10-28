@@ -396,7 +396,6 @@ fn r2_symlink_loop_and_dangling_are_ignored() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "BUG: katalog po jednej stronie zastąpiony symlinkiem jest pomijany przy skanie, więc pliki w nim wyglądają na usunięte i są kasowane po drugiej stronie"]
 fn r2_dir_replaced_by_symlink_must_not_delete_other_side() {
     use std::os::unix::fs::symlink;
     let (t, l, r, s) = setup();

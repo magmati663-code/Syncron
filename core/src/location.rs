@@ -30,6 +30,8 @@ pub struct Entry {
 pub struct Listing {
     pub files: BTreeMap<String, Entry>,
     pub collisions: Vec<String>,
+    /// Pominięte elementy (np. nazwy spoza UTF-8, niebezpieczne ścieżki ze zdalnego listingu): opisy po polsku.
+    pub skipped: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -52,6 +54,8 @@ impl From<io::Error> for OpError {
     fn from(e: io::Error) -> Self {
         if is_busy(&e) {
             OpError::Busy(e.to_string())
+        } else if e.kind() == io::ErrorKind::PermissionDenied {
+            OpError::Failed(format!("brak uprawnień: {e}"))
         } else {
             OpError::Failed(e.to_string())
         }
@@ -63,7 +67,8 @@ fn is_busy(e: &io::Error) -> bool {
     if matches!(e.raw_os_error(), Some(32) | Some(33)) {
         return true; // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION
     }
-    e.kind() == io::ErrorKind::PermissionDenied || e.kind() == io::ErrorKind::Interrupted
+    // brak uprawnień (PermissionDenied) to zwykły błąd, nie zajętość pliku
+    e.kind() == io::ErrorKind::Interrupted
 }
 
 /// Opcje kopiowania w ramach jednego przebiegu.
@@ -132,11 +137,14 @@ impl Location {
     }
 
     pub fn list(&self, rules: &RuleSet) -> Result<Listing, String> {
-        let raw = match self {
+        let (raw, skipped) = match self {
             Location::Local(root) => list_local(root)?,
             Location::Rclone(base) => list_rclone(base)?,
         };
-        let mut out = Listing::default();
+        let mut out = Listing {
+            skipped,
+            ..Listing::default()
+        };
         for (rel, meta) in raw {
             if !rules.allows(&FileInfo {
                 path: rel.clone(),
@@ -179,7 +187,9 @@ impl Location {
     ) -> Result<(), OpError> {
         match (from, self) {
             (Location::Local(a), Location::Local(b)) => {
-                let (src, dst) = (local_full(a, from_rel), local_full(b, to_rel));
+                check_local_rel(from_rel)?;
+                let src = local_full(a, from_rel);
+                let dst = prepare_target(b, to_rel, true)?;
                 let mut last = None;
                 for delay in [0u64, 300, 1500, 4000] {
                     if delay > 0 {
@@ -209,9 +219,10 @@ impl Location {
             }
             _ => {
                 if let Location::Local(b) = self {
-                    if let Some(parent) = local_full(b, to_rel).parent() {
-                        fs::create_dir_all(parent)?;
-                    }
+                    prepare_target(b, to_rel, true)?;
+                }
+                if let Location::Local(_) = from {
+                    check_local_rel(from_rel)?;
                 }
                 // lokalne źródło zablokowane przez inny program: rclone dostaje kopię z migawki VSS
                 let mut source = from.full(from_rel);
@@ -256,11 +267,11 @@ impl Location {
     pub fn rename(&self, from_rel: &str, to_rel: &str) -> Result<(), OpError> {
         match self {
             Location::Local(p) => {
-                let dst = local_full(p, to_rel);
-                if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                Ok(fs::rename(local_full(p, from_rel), dst)?)
+                let src = prepare_target(p, from_rel, false)?;
+                let dst = prepare_target(p, to_rel, true)?;
+                fs::rename(src, &dst)?;
+                remove_empty_parents(p, from_rel);
+                Ok(())
             }
             Location::Rclone(_) => rclone_op(&["moveto", &self.full(from_rel), &self.full(to_rel)]),
         }
@@ -294,21 +305,24 @@ impl Location {
     pub fn remove(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
         if stamp.is_empty() {
             return match self {
-                Location::Local(p) => Ok(fs::remove_file(local_full(p, rel))?),
+                Location::Local(p) => {
+                    fs::remove_file(prepare_target(p, rel, false)?)?;
+                    remove_empty_parents(p, rel);
+                    Ok(())
+                }
                 Location::Rclone(_) => rclone_op(&["deletefile", &self.full(rel)]),
             };
         }
         let trash_rel = format!("{TRASH_DIR}/{stamp}/{rel}");
         match self {
             Location::Local(p) => {
-                let (src, dst) = (local_full(p, rel), local_full(p, &trash_rel));
-                if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)?;
-                }
+                let src = prepare_target(p, rel, false)?;
+                let dst = prepare_target(p, &trash_rel, true)?;
                 if fs::rename(&src, &dst).is_err() {
                     fs::copy(&src, &dst)?;
                     fs::remove_file(&src)?;
                 }
+                remove_empty_parents(p, rel);
                 Ok(())
             }
             Location::Rclone(_) => rclone_op(&["moveto", &self.full(rel), &self.full(&trash_rel)]),
@@ -427,14 +441,19 @@ impl Location {
         let mut out = Vec::new();
         match self {
             Location::Local(p) => {
-                let dir = local_full(p, rel);
+                let dir = if rel.is_empty() {
+                    local_full(p, "")
+                } else {
+                    resolve_local(p, rel, true, false).map_err(|e| e.to_string())?
+                };
                 for e in fs::read_dir(&dir)
                     .map_err(|e| format!("{}: {e}", dir.display()))?
                     .flatten()
                 {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    if n != TRASH_DIR
-                        && n != LEGACY_TRASH_DIR
+                    let Ok(n) = e.file_name().into_string() else {
+                        continue; // nazwa spoza UTF-8: nie do wybrania w kreatorze
+                    };
+                    if !(rel.is_empty() && (n == TRASH_DIR || n == LEGACY_TRASH_DIR))
                         && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
                     {
                         out.push(n);
@@ -442,10 +461,19 @@ impl Location {
                 }
             }
             Location::Rclone(_) => {
+                if !rel.is_empty() {
+                    names::check_rel(rel)?;
+                }
                 let raw = run_rclone(&["lsjson", "--dirs-only", "--no-mimetype", &self.full(rel)])?;
                 let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
                 for it in v.as_array().into_iter().flatten() {
-                    if let Some(n) = it["Name"].as_str().filter(|n| *n != TRASH_DIR) {
+                    if let Some(n) = it["Name"]
+                        .as_str()
+                        .filter(|n| {
+                            !(rel.is_empty() && (*n == TRASH_DIR || *n == LEGACY_TRASH_DIR))
+                        })
+                        .filter(|n| names::check_rel(n).is_ok())
+                    {
                         out.push(n.to_string());
                     }
                 }
@@ -520,12 +548,98 @@ impl Location {
 // ---------- lokalne ----------
 
 /// Pełna ścieżka lokalna; na Windows z prefiksem `\\?\` (ścieżki dłuższe niż 260 znaków, UNC).
+/// Wynik zawsze leży pod `root`: puste komponenty, `.` i `..` są pomijane, a na Windows także `\` (jako separator)
+/// i litery dysku (`C:`). Do zapisu używaj `prepare_target` (odrzuca takie ścieżki z błędem).
 pub fn local_full(root: &Path, rel: &str) -> PathBuf {
     let mut p = root.to_path_buf();
-    for part in rel.split('/').filter(|s| !s.is_empty()) {
+    let sep: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    for part in rel
+        .split(sep)
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+    {
+        if cfg!(windows) && part.contains(':') {
+            continue; // litera dysku / strumień NTFS: nie wychodzimy z korzenia
+        }
         p.push(part);
     }
     fs_path(&p)
+}
+
+/// Walidacja ścieżki względnej dla operacji lokalnych (jak `names::check_rel`, ale znaki sterujące w nazwach
+/// plików lokalnych są dozwolone).
+fn check_local_rel(rel: &str) -> Result<(), OpError> {
+    let cleaned: String = rel
+        .chars()
+        .map(|c| if (c as u32) < 32 { '_' } else { c })
+        .collect();
+    names::check_rel(&cleaned).map_err(|e| OpError::Failed(format!("niebezpieczna ścieżka ({e})")))
+}
+
+/// Zwraca pełną ścieżkę `rel` pod `root` po sprawdzeniu, że żaden komponent nie jest dowiązaniem symbolicznym
+/// (zapis/odczyt nie może wyjść poza korzeń). `include_last` = sprawdź też ostatni komponent. `create` = utwórz
+/// brakujące foldery nadrzędne (pojedynczo, bez podążania za dowiązaniami).
+fn resolve_local(
+    root: &Path,
+    rel: &str,
+    include_last: bool,
+    create: bool,
+) -> Result<PathBuf, OpError> {
+    check_local_rel(rel)?;
+    let parts: Vec<&str> = rel.split('/').collect();
+    let n = if include_last {
+        parts.len()
+    } else {
+        parts.len() - 1
+    };
+    let mut cur = fs_path(root);
+    for (i, part) in parts.iter().enumerate() {
+        cur.push(part);
+        if i >= n {
+            continue;
+        }
+        match fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(OpError::Failed(format!(
+                    "odmowa zapisu: „{}” jest dowiązaniem symbolicznym (mogłoby wyprowadzić poza folder synchronizacji)",
+                    parts[..=i].join("/")
+                )))
+            }
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => {
+                return Err(OpError::Failed(format!(
+                    "„{}” nie jest folderem",
+                    parts[..=i].join("/")
+                )))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound && create => {
+                match fs::create_dir(&cur) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(cur)
+}
+
+/// Pełna ścieżka pliku `rel` pod `root`, bezpieczna do zapisu/usunięcia (patrz `resolve_local`).
+fn prepare_target(root: &Path, rel: &str, create: bool) -> Result<PathBuf, OpError> {
+    resolve_local(root, rel, false, create)
+}
+
+/// Po usunięciu pliku sprząta puste foldery nadrzędne aż do korzenia (samego korzenia nigdy).
+fn remove_empty_parents(root: &Path, rel: &str) {
+    let mut parts: Vec<&str> = rel.split('/').collect();
+    parts.pop();
+    while !parts.is_empty() {
+        let p = local_full(root, &parts.join("/"));
+        if fs::remove_dir(&p).is_err() {
+            break;
+        }
+        parts.pop();
+    }
 }
 
 #[allow(unused_variables)]
@@ -562,18 +676,45 @@ fn meta_of(m: &fs::Metadata) -> Option<Meta> {
     })
 }
 
-fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
+type Scan = (Vec<(String, Meta)>, Vec<String>);
+
+fn list_local(root: &Path) -> Result<Scan, String> {
     let base = fs_path(root);
     if !base.is_dir() {
         return Err(format!("folder niedostępny: {}", root.display()));
     }
     let mut out = Vec::new();
+    let mut skipped = Vec::new();
     let mut stack = vec![(base, String::new())];
     while let Some((dir, rel)) = stack.pop() {
         let rd = fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for ent in rd {
             let ent = ent.map_err(|e| format!("{}: {e}", dir.display()))?;
-            let name = ent.file_name().to_string_lossy().into_owned();
+            let Ok(name) = ent.file_name().into_string() else {
+                skipped.push(format!(
+                    "pominięto element o nazwie spoza UTF-8: {}/{}",
+                    rel,
+                    ent.file_name().to_string_lossy()
+                ));
+                continue;
+            };
+            let ft = ent.file_type().map_err(|e| format!("{name}: {e}"))?;
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                // kosz synchronizacji pomijamy tylko w korzeniu
+                if rel.is_empty() && (name == TRASH_DIR || name == LEGACY_TRASH_DIR) {
+                    continue;
+                }
+                let r = if rel.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{rel}/{name}")
+                };
+                stack.push((ent.path(), r));
+                continue;
+            }
             if name.ends_with(".syncron.tmp") || name.ends_with(LEGACY_TMP_SUFFIX) {
                 // pozostałość po przerwanym kopiowaniu (zerwane połączenie, restart): sprzątamy, gdy jest stara
                 if let Ok(age) = ent
@@ -587,11 +728,7 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
                 }
                 continue;
             }
-            if name == TRASH_DIR || name == LEGACY_TRASH_DIR || names::is_temp(&name) {
-                continue;
-            }
-            let ft = ent.file_type().map_err(|e| format!("{name}: {e}"))?;
-            if ft.is_symlink() {
+            if names::is_temp(&name) {
                 continue;
             }
             let r = if rel.is_empty() {
@@ -599,9 +736,7 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
             } else {
                 format!("{rel}/{name}")
             };
-            if ft.is_dir() {
-                stack.push((ent.path(), r));
-            } else if ft.is_file() {
+            if ft.is_file() {
                 let md = ent.metadata().map_err(|e| format!("{r}: {e}"))?;
                 if let Some(m) = meta_of(&md) {
                     out.push((r, m));
@@ -609,7 +744,7 @@ fn list_local(root: &Path) -> Result<Vec<(String, Meta)>, String> {
             }
         }
     }
-    Ok(out)
+    Ok((out, skipped))
 }
 
 fn open_shared(p: &Path) -> io::Result<File> {
@@ -624,19 +759,44 @@ fn open_shared(p: &Path) -> io::Result<File> {
     o.open(p)
 }
 
-fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Result<()> {
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
-    }
+/// Tworzy unikalny plik tymczasowy obok `dst` (`create_new`: nie podąża za istniejącym dowiązaniem/plikiem; kolizja
+/// nazwy = kolejny sufiks, cudzych plików nie usuwamy). Nazwa ma ograniczoną długość niezależnie od długości nazwy docelowej.
+fn create_new_tmp(dst: &Path) -> io::Result<(File, PathBuf)> {
+    static N: AtomicUsize = AtomicUsize::new(0);
     let fname = dst
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dst.with_file_name(format!("{fname}.syncron.tmp"));
+    let h = blake3::hash(fname.as_bytes()).to_hex();
+    let mut o = OpenOptions::new();
+    o.write(true).create_new(true);
+    let mut last = None;
+    for _ in 0..16 {
+        let tmp = dst.with_file_name(format!(
+            ".{}-{:x}-{:x}.syncron.tmp",
+            &h[..12],
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        match o.open(&tmp) {
+            Ok(f) => return Ok((f, tmp)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("nie można utworzyć pliku tymczasowego")))
+}
+
+fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Result<()> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = std::cell::RefCell::new(None::<PathBuf>);
     let mut inp = open_shared(src)?;
     let before = inp.metadata()?;
     let res = (|| {
-        let mut out = File::create(&tmp)?;
+        let (mut out, tmp) = create_new_tmp(dst)?;
+        *tmp_path.borrow_mut() = Some(tmp.clone());
         let mut hasher = blake3::Hasher::new();
         if verify || bw.current_kbps() > 0 || bw.hours.is_some() {
             let mut buf = vec![0u8; 256 * 1024];
@@ -687,10 +847,19 @@ fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Resul
             &tmp,
             filetime::FileTime::from_last_modification_time(&before),
         )?;
+        // pusty folder w miejscu pliku docelowego (plik↔folder) nie blokuje zapisu
+        if fs::symlink_metadata(dst)
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_dir(dst);
+        }
         fs::rename(&tmp, dst)
     })();
     if res.is_err() {
-        let _ = fs::remove_file(&tmp);
+        if let Some(t) = tmp_path.borrow().as_ref() {
+            let _ = fs::remove_file(t);
+        }
     }
     res
 }
@@ -744,11 +913,13 @@ fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, Stri
         if size < 0 {
             continue; // np. dokumenty Google bez rozmiaru
         }
-        let path = it["Path"].as_str().unwrap_or("").to_string();
+        let Some(path) = it["Path"].as_str().map(str::to_string) else {
+            continue; // wpis bez ścieżki
+        };
         let name = path.rsplit('/').next().unwrap_or("");
         if skip_special
-            && (path.starts_with(TRASH_DIR)
-                || path.starts_with(LEGACY_TRASH_DIR)
+            && (path.starts_with(&format!("{TRASH_DIR}/"))
+                || path.starts_with(&format!("{LEGACY_TRASH_DIR}/"))
                 || names::is_temp(name))
         {
             continue;
@@ -774,10 +945,28 @@ fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, Stri
     Ok(out)
 }
 
-fn list_rclone(base: &str) -> Result<Vec<(String, Meta)>, String> {
+fn list_rclone(base: &str) -> Result<Scan, String> {
     match run_rclone(&["lsjson", "-R", "--files-only", "--no-mimetype", base]) {
-        Ok(s) => parse_lsjson(&s, true),
-        Err(e) if e.to_lowercase().contains("directory not found") => Ok(vec![]),
+        Ok(s) => {
+            // ścieżki ze zdalnego listingu to dane z zewnątrz: odrzucamy `..`, bezwzględne, puste itp.
+            let mut skipped = Vec::new();
+            let ok = parse_lsjson(&s, true)?
+                .into_iter()
+                // wiodący '/' (np. "/abs/x") traktujemy jak ścieżkę względną korzenia
+                .map(|(p, m)| (p.strip_prefix('/').map(str::to_string).unwrap_or(p), m))
+                .filter(|(p, _)| match names::check_rel(p) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        skipped.push(format!(
+                            "pominięto niebezpieczną ścieżkę ze zdalnego listingu: {e}"
+                        ));
+                        false
+                    }
+                })
+                .collect();
+            Ok((ok, skipped))
+        }
+        Err(e) if e.to_lowercase().contains("directory not found") => Ok((vec![], vec![])),
         Err(e) => Err(e),
     }
 }

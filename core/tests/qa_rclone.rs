@@ -816,7 +816,6 @@ fn r2_empty_stderr_gives_informative_message() {
 }
 
 #[test]
-#[ignore = "BUG: wpis z Size=-1 (lub poza zakresem i64) jest po cichu pomijany; plik zsynchronizowany wcześniej wygląda na usunięty i jest usuwany po drugiej stronie"]
 fn r2_size_minus_one_for_known_file_must_not_delete_other_side() {
     let f = fx();
     let j = f.job("fake:", json!({}));
@@ -905,7 +904,6 @@ fn r3_dry_run_50k_remote_vs_empty_local() {
 }
 
 #[test]
-#[ignore = "BUG: detect_moves ma złożoność O(n*m) przy wielu kandydatach o tym samym rozmiarze/czasie (20k+20k: ok. 4,5 s, 50k+50k: pół minuty)"]
 fn r3_detect_moves_scales_with_many_candidates() {
     // lokalnie: 20k "starych" wpisów w bazie usuniętych po lewej + 20k nowych plików o tym samym rozmiarze i czasie
     let t = tempfile::tempdir().unwrap();
@@ -1066,7 +1064,6 @@ fn r3_repeatability_flaky_remote_converges() {
 }
 
 #[test]
-#[ignore = "BUG: open_db przy równoległym pierwszym uruchomieniu dwóch zadań na świeżym katalogu stanu zwraca 'database is locked' (PRAGMA journal_mode=WAL / tworzenie schematu bez ponowienia)"]
 fn r3_two_jobs_first_run_share_fresh_state_db() {
     // dwa zadania startują jednocześnie na świeżym katalogu stanu (tworzenie bazy + WAL)
     let mut failures = Vec::new();

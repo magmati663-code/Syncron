@@ -354,7 +354,6 @@ fn r2_future_negative_mtime_ordering() {
 }
 
 #[test]
-#[ignore = "BUG(niska): plan::same przepełnia i64 przy skrajnych mtime (panika w debug, zawinięcie w release)"]
 fn bug_extreme_mtime_does_not_panic() {
     // mtime z rclone (`ModTime` rok 9999 / 0001) lub uszkodzonego FS: różnica może przekroczyć i64
     let l = tree(&[("a", m(1, i64::MAX))]);
@@ -660,7 +659,6 @@ fn r2_force_overrides_guard_and_uses_trash() {
 /// usunięty a.txt i NOWY, inny plik b.txt o tym samym rozmiarze i mtime -> prawa strona dostaje
 /// STARĄ treść pod nową nazwą, a baza uznaje strony za zgodne (cicha rozbieżność, treść b.txt nie trafia na prawo).
 #[test]
-#[ignore = "BUG: detect_moves myli usunięcie + nowy plik o tym samym rozmiarze/mtime z przeniesieniem (cicha rozbieżność treści)"]
 fn bug_move_false_positive_same_size_and_mtime() {
     let env = setup();
     write(&env.l.join("a.txt"), "AAAA", 1_700_000_000);
@@ -687,7 +685,6 @@ fn bug_move_false_positive_same_size_and_mtime() {
 /// T1-02: dwa konflikty tego samego pliku w jednym dniu (KeepBoth) – nazwa aliasu zawiera tylko datę,
 /// więc druga kopia konfliktowa nadpisuje pierwszą na lewej stronie bez kopii zapasowej.
 #[test]
-#[ignore = "BUG: konflikt KeepBoth tego samego dnia nadpisuje wcześniejszą kopię konfliktową (nazwa tylko z datą, bez backupu)"]
 fn bug_keep_both_same_day_overwrites_previous_alias() {
     let env = setup();
     for i in 0..4 {
@@ -735,7 +732,6 @@ fn bug_keep_both_same_day_overwrites_previous_alias() {
 /// T1-03: tryb jednostronny L->P: pusta prawa strona (nowy dysk kopii) blokuje całe zadanie,
 /// choć plan zawiera same kopiowania (nic nie jest usuwane).
 #[test]
-#[ignore = "BUG: blokada 'jedna ze stron jest pusta' w trybie L->P blokuje odtworzenie pustego celu (brak usunięć w planie)"]
 fn bug_one_way_empty_destination_is_blocked() {
     let env = setup();
     write(&env.l.join("a.txt"), "1", 1_700_000_000);
@@ -1382,7 +1378,6 @@ fn r3_syncignore_excluded_file_not_deleted_when_ignored_later() {
 /// T1-04: plik zmienia rozmiar tak, że wypada poza reguły rozmiaru (max_size) tylko po jednej stronie:
 /// lewa kopia staje się "niewidoczna" i jest traktowana jak usunięta -> prawa kopia trafia do kosza.
 #[test]
-#[ignore = "BUG: plik wykluczony regułą rozmiaru po jednej stronie jest traktowany jak usunięty i kasowany po drugiej"]
 fn bug_file_growing_past_max_size_is_not_deleted_on_other_side() {
     let env = setup();
     write(&env.l.join("a.txt"), "abc", 1_700_000_000);

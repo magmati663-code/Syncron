@@ -411,6 +411,9 @@ pub fn run_job_with(
         rep.errors
             .push(format!("kolizja nazw (wielkość liter/Unicode): {c}"));
     }
+    for c in ll.skipped.iter().chain(rl.skipped.iter()) {
+        rep.errors.push(c.clone());
+    }
 
     let db = open_db(state_dir)?;
     let (bl, br) = load_base(&db, &job.id)?;

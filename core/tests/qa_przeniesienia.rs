@@ -257,7 +257,6 @@ fn r1_directory_rename_with_many_files() {
 // ---------------------------------------------------------------- RUNDA 2
 
 #[test]
-#[ignore = "BUG T5-01: fałszywe dopasowanie przeniesienia (ten sam rozmiar i mtime, inna treść) psuje plik docelowy"]
 fn r2_false_match_different_content_same_size_and_mtime() {
     // Usunięty a.txt i nowy b.txt o innej treści, ale tym samym rozmiarze i mtime
     // (np. rozpakowanie archiwum zachowującego czasy) to NIE jest przeniesienie.
@@ -277,7 +276,6 @@ fn r2_false_match_different_content_same_size_and_mtime() {
 }
 
 #[test]
-#[ignore = "BUG T5-01: fałszywe dopasowanie przeniesienia (ten sam rozmiar i mtime, inna treść) psuje plik docelowy"]
 fn r2_false_match_is_never_repaired_later() {
     // Skutek T5-01: baza uznaje pliki za zgodne, więc błąd nie naprawi się sam.
     let (_t, l, r, s) = setup();
@@ -1020,7 +1018,6 @@ fn r3_random_renames_converge_without_loss() {
 }
 
 #[test]
-#[ignore = "BUG T5-01: fałszywe dopasowanie przeniesienia (ten sam rozmiar i mtime, inna treść) psuje cel"]
 fn r3_matrix_collisions_one_way() {
     let f = matrix(1..13, true, |c| !c.only_add && c.mode != Mode::TwoWay);
     assert!(
@@ -1033,7 +1030,6 @@ fn r3_matrix_collisions_one_way() {
 }
 
 #[test]
-#[ignore = "BUG T5-01: fałszywe dopasowanie przeniesienia (ten sam rozmiar i mtime, inna treść) psuje cel"]
 fn r3_matrix_collisions_two_way() {
     let f = matrix(1..13, true, |c| !c.only_add && c.mode == Mode::TwoWay);
     assert!(
