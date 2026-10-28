@@ -211,8 +211,8 @@ impl Job {
         if let Some(min) = self.min_size.filter(|m| *m > 0) {
             rs.exclude.push(Rule::MaxSize(min - 1));
         }
-        if let Some(max) = self.max_size {
-            rs.exclude.push(Rule::MinSize(max + 1));
+        if let Some(max) = self.max_size.and_then(|m| m.checked_add(1)) {
+            rs.exclude.push(Rule::MinSize(max));
         }
         rs
     }

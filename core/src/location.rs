@@ -280,7 +280,17 @@ impl Location {
     /// Odczytuje mały plik tekstowy (np. `.syncignore`); brak pliku lub błąd = None.
     pub fn read_text(&self, rel: &str) -> Option<String> {
         match self {
-            Location::Local(p) => fs::read_to_string(local_full(p, rel)).ok(),
+            // Bajty dekodowane tolerancyjnie (UTF-8/BOM/UTF-16/reszta lossy), by `.syncignore` nie-UTF-8 nie był po cichu
+            // pomijany w całości. Brak pliku = None; inny błąd odczytu = ostrzeżenie na stderr i None.
+            Location::Local(p) => match fs::read(local_full(p, rel)) {
+                Ok(b) => Some(crate::rules::decode_text(&b)),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        eprintln!("Ostrzeżenie: nie można odczytać pliku {rel}: {e}");
+                    }
+                    None
+                }
+            },
             Location::Rclone(_) => run_rclone(&["cat", &self.full(rel)]).ok(),
         }
     }
