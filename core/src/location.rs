@@ -778,19 +778,23 @@ fn prepare_target(root: &Path, rel: &str, create: bool) -> Result<PathBuf, OpErr
     resolve_local(root, rel, false, create)
 }
 
+/// Przejściowe błędy tworzenia folderu/pliku w folderze, który właśnie jest usuwany przez inny wątek
+/// (na Windows folder w stanie „delete pending” daje „odmowa dostępu” zamiast „nie znaleziono”).
+fn transient_dir_error(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+    )
+}
+
 /// `create_dir_all` odporne na wyścig z równoległym sprzątaniem pustych folderów (`remove_empty_parents`):
-/// między utworzeniem a sprawdzeniem folder mógł zniknąć, co daje przejściowe `AlreadyExists`/`NotFound`.
+/// między utworzeniem a sprawdzeniem folder mógł zniknąć, co daje przejściowe `AlreadyExists`/`NotFound` (na Windows także `PermissionDenied`).
 fn ensure_dir(path: &Path) -> io::Result<()> {
     let mut last = None;
     for _ in 0..8 {
         match fs::create_dir_all(path) {
             Ok(()) => return Ok(()),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
-                ) =>
-            {
+            Err(e) if transient_dir_error(&e) => {
                 last = Some(e);
                 sleep(Duration::from_millis(2));
             }
@@ -971,8 +975,9 @@ fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Resul
         let mut tries = 0;
         let (mut out, tmp) = loop {
             match create_new_tmp(dst) {
-                Err(e) if e.kind() == io::ErrorKind::NotFound && tries < 8 => {
+                Err(e) if transient_dir_error(&e) && tries < 8 => {
                     tries += 1;
+                    sleep(Duration::from_millis(2));
                     if let Some(parent) = dst.parent() {
                         ensure_dir(parent)?;
                     }
