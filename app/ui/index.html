@@ -10,7 +10,7 @@
 <aside>
   <div class="brand"><div class="logo" id="logo"></div><span>Syncron</span></div>
   <nav>
-    <button data-tab="jobs" class="active"><span data-i="sync"></span><span class="l">Zadania</span></button>
+    <button data-tab="jobs" class="active" aria-current="page"><span data-i="sync"></span><span class="l">Zadania</span></button>
     <button data-tab="activity"><span data-i="activity"></span><span class="l">Aktywność</span><span class="badge" id="attBadge" hidden></span></button>
     <button data-tab="trash"><span data-i="trash"></span><span class="l">Kosz i wersje</span></button>
     <button data-tab="accounts"><span data-i="cloud"></span><span class="l">Konta chmurowe</span></button>
@@ -43,6 +43,7 @@
       <input id="histQ" type="search" placeholder="Szukaj pliku lub operacji…">
       <button id="exportCsv"><span data-i="download"></span>CSV</button>
     </div>
+    <p class="muted" id="histNote" hidden></p>
     <div class="box scroll"><table id="hist"><thead><tr><th>Czas</th><th>Zadanie</th><th>Operacja</th><th>Plik</th><th>Szczegóły</th></tr></thead><tbody></tbody></table></div>
   </section>
 
@@ -77,7 +78,7 @@
         </div></div>
       <label class="sw"><input type="checkbox" id="autostart"><span>Uruchamiaj razem z systemem<small>Aplikacja startuje w tle, w zasobniku systemowym.</small></span></label>
       <label class="sw"><input type="checkbox" id="notify"><span>Powiadomienia systemowe<small>O błędach, zatrzymaniu przez zabezpieczenie i konfliktach.</small></span></label>
-      <label>Powiadom, gdy zadanie jest niedostępne dłużej niż (minuty, 0 = wyłączone)<input id="unavail" type="number" min="0"></label>
+      <label>Powiadom, gdy zadanie jest niedostępne dłużej niż (minuty, 0 = wyłączone)<input id="unavail" type="number" min="0" step="1"></label>
       <div class="form" style="gap:6px"><b>Język</b>
         <div class="choice c2"><label class="opt"><input type="radio" name="lang" value="pl"><b>Polski</b></label><label class="opt"><input type="radio" name="lang" value="en"><b>English</b></label></div></div>
       <div class="form" style="gap:8px"><b>Aktualizacje</b>
@@ -101,7 +102,7 @@
 </main>
 
 <dialog id="editor">
-  <form id="jobForm" autocomplete="off">
+  <form id="jobForm" autocomplete="off" novalidate>
     <div class="dh">
       <h2 id="edTitle">Nowe zadanie</h2>
       <div class="steps" id="steps"><span></span><span></span><span></span><span></span><span></span></div>
@@ -119,6 +120,7 @@
             <div class="pick"><button type="button" class="sm" data-pick="right"><span data-i="folder"></span>Wybierz folder…</button><select data-remote="right"></select></div>
             <div class="hint" data-hint="right"></div></div>
         </div>
+        <p class="msg warn" id="nestWarn" role="alert" hidden>Uwaga: jedna lokalizacja leży wewnątrz drugiej. Synchronizacja kopiowałaby folder sam do siebie — wybierz foldery, które się nie zawierają.</p>
         <p class="muted">Lokalizacją może być folder, dysk sieciowy (<code>\\serwer\udział</code>) albo konto chmurowe dodane w zakładce „Konta chmurowe”.</p>
       </div>
       <!-- 2 -->
@@ -143,8 +145,8 @@
         <div class="g2">
           <label>Uwzględnij tylko (maski, jedna na linię)<textarea name="include" rows="4" placeholder="*.docx&#10;faktury/*"></textarea></label>
           <label>Wyklucz (maski, jedna na linię)<textarea name="exclude" rows="4" placeholder="*.log&#10;*.bak"></textarea></label>
-          <label>Min. rozmiar pliku (MB)<input name="min_mb" type="number" min="0" step="any"></label>
-          <label>Maks. rozmiar pliku (MB)<input name="max_mb" type="number" min="0" step="any"></label>
+          <label>Min. rozmiar pliku (MB)<input name="min_mb" type="number" min="0" step="any" placeholder="bez limitu"></label>
+          <label>Maks. rozmiar pliku (MB)<input name="max_mb" type="number" min="0" step="any" placeholder="bez limitu"></label>
         </div>
         <div class="box" style="box-shadow:none">
           <div class="pick" style="justify-content:space-between"><b>Wybór podfolderów (lewa strona)</b><button type="button" class="sm" id="treeLoad">Wczytaj foldery</button></div>
@@ -197,7 +199,7 @@
         <label class="sw"><input type="checkbox" name="enabled"><span>Zadanie włączone</span></label>
         <div class="summary" id="summary"></div>
       </div>
-      <p class="err" id="edErr"></p>
+      <p class="err" id="edErr" role="status" aria-live="polite"></p>
     </div>
     <div class="df">
       <button type="button" id="edCancel" class="ghost">Anuluj</button>
@@ -218,7 +220,7 @@
   <div class="df"><button id="cfNo" class="ghost">Anuluj</button><button id="cfYes" class="primary">OK</button></div>
 </dialog>
 
-<div id="toasts"></div>
+<div id="toasts" role="status" aria-live="polite"></div>
 <script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
