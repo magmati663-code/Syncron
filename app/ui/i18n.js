@@ -109,6 +109,12 @@
     "Obie strony są zgodne — nic do zrobienia.": "Both sides match — nothing to do.", "Nic nie zostało zmienione.": "Nothing was changed.",
     "kopiowanie →": "copy →", "kopiowanie ←": "copy ←", "usunięcie": "deletion", "konflikt: obie wersje": "conflict: both versions", "konflikt rozstrzygnięty": "conflict resolved",
     "Zmiany z": "Changes from", "i": "and", "są przenoszone na drugą stronę.": "are carried to the other side.", "Pliki z": "Files from", "są kopiowane do": "are copied to",
+    "Limit prędkości transferu": "Transfer speed limit", "Limit (KB/s, 0 = bez limitu)": "Limit (KB/s, 0 = unlimited)", "Limit poza godzinami (KB/s, 0 = bez limitu)": "Limit outside those hours (KB/s, 0 = unlimited)",
+    "Limit obowiązuje od godziny": "Limit applies from hour", "Powiadom, gdy zadanie jest niedostępne dłużej niż (minuty, 0 = wyłączone)": "Notify when a job is unavailable for longer than (minutes, 0 = off)",
+    "Dziennik i diagnostyka": "Log & diagnostics", "Skopiuj diagnostykę": "Copy diagnostics", "Otwórz folder dziennika": "Open log folder",
+    "Diagnostyka zawiera wersję, system, stan zadań (bez ścieżek plików) i ostatnie wpisy dziennika — wklej ją w zgłoszeniu problemu.": "Diagnostics contain the version, system, job states (without file paths) and recent log entries — paste them into a bug report.",
+    "Diagnostyka skopiowana do schowka": "Diagnostics copied to clipboard", "Diagnostyka": "Diagnostics", "Zaznacz całość (Ctrl/Cmd+A) i skopiuj.": "Select all (Ctrl/Cmd+A) and copy.",
+    "przenieś →": "move →", "← przenieś": "← move", "przeniesienie": "move",
     "Zapisano": "Saved", "jeszcze nie": "not yet", "przed chwilą": "just now", "Jeszcze nie uruchomione": "Not run yet",
   };
 

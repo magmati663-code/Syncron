@@ -50,7 +50,9 @@ function locKind(p) {
   if (/^(\\\\|\/\/|\/Volumes|\/mnt|\/net)/.test(p)) return "network";
   return "folder";
 }
-const ACTION = (a) => (typeof a === "string" ? { CopyToRight: "kopiuj →", CopyToLeft: "← kopiuj", DeleteLeft: "usuń po lewej", DeleteRight: "usuń po prawej" }[a] || a : a.Conflict.keep_both ? "konflikt (zachowaj obie)" : "konflikt (do decyzji)");
+const ACTION = (a) => (typeof a === "string" ? { CopyToRight: "kopiuj →", CopyToLeft: "← kopiuj", DeleteLeft: "usuń po lewej", DeleteRight: "usuń po prawej" }[a] || a
+  : a.RenameRight ? "przenieś →" : a.RenameLeft ? "← przenieś" : a.Conflict.keep_both ? "konflikt (zachowaj obie)" : "konflikt (do decyzji)");
+const actCls = (a) => (typeof a === "string" ? (a.startsWith("Delete") ? "warn" : "ok") : a.Conflict ? "bad" : "ok");
 
 function toast(msg, kind = "") {
   const t = document.createElement("div");
@@ -143,9 +145,9 @@ function renderJobs() {
     const state = !j.enabled ? "disabled" : overview.paused ? "paused" : st.state || "idle";
     const rep = st.last, pr = st.progress;
     let stats = st.last_run ? `Ostatnio ${rel(st.last_run)}` : "Jeszcze nie uruchomione";
-    if (rep) stats += ` · skopiowano ${rep.copied}, usunięto ${rep.deleted}`;
+    if (rep) stats += ` · skopiowano ${rep.copied}, usunięto ${rep.deleted}` + (rep.moved ? `, przeniesiono ${rep.moved}` : "");
     if (st.next_run && state !== "disabled") stats += ` · następne ${new Date(st.next_run * 1000).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}`;
-    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", (j.trash_days > 0 ? `kosz ${j.trash_days} dni` : "bez kosza"), j.verify && "weryfikacja sum", j.conditions?.ac_only && "tylko zasilanie sieciowe", (j.conditions?.wifi || []).length && "Wi-Fi: " + j.conditions.wifi.join(", "), vssInfo.supported && j.use_vss !== false && "VSS", (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
+    const tags = [schedText(j.schedule), j.no_delete_left && "bez usuwania po lewej", j.no_delete_right && "bez usuwania po prawej", j.only_add && "tylko dodawanie", (j.trash_days > 0 ? `kosz ${j.trash_days} dni` : "bez kosza"), j.verify && "weryfikacja sum", j.conditions?.ac_only && "tylko zasilanie sieciowe", (j.conditions?.wifi || []).length && "Wi-Fi: " + j.conditions.wifi.join(", "), (j.bandwidth?.kbps || j.bandwidth?.off_kbps) && `limit ${j.bandwidth.kbps || "∞"} KB/s`, vssInfo.supported && j.use_vss !== false && "VSS", (j.exclude || []).length && `wyklucza ${j.exclude.length}`].filter(Boolean);
     let extra = "";
     if (state === "running") {
       const pct = pr && pr.total ? Math.round((pr.done / pr.total) * 100) : null;
@@ -197,7 +199,7 @@ $("#jobs").addEventListener("click", async (e) => {
 function showReport(title, r) {
   $("#repTitle").textContent = "Symulacja: " + title;
   const treeHtml = diffTree(r.planned);
-  const rows = r.planned.map(([k, a]) => `<tr><td><span class="kind ${typeof a === "string" && a.startsWith("Delete") ? "warn" : typeof a !== "string" ? "bad" : "ok"}">${ACTION(a)}</span></td><td>${esc(k)}</td></tr>`).join("");
+  const rows = r.planned.map(([k, a]) => `<tr><td><span class="kind ${actCls(a)}">${ACTION(a)}</span></td><td>${esc(k)}${a.RenameRight || a.RenameLeft ? ` <span class="muted">(z: ${esc((a.RenameRight || a.RenameLeft).from)})</span>` : ""}</td></tr>`).join("");
   $("#repBody").innerHTML = `<p>Przeskanowano: <b>${r.scanned_left}</b> plików po lewej i <b>${r.scanned_right}</b> po prawej. Planowanych działań: <b>${r.planned.length}</b>. <span class="muted">Nic nie zostało zmienione.</span></p>` +
     (r.blocked ? `<div class="msg warn"><b>Zabezpieczenie zatrzymałoby synchronizację:</b> ${esc(r.blocked)}</div>` : "") +
     (r.errors.length ? `<div class="msg">${r.errors.map(esc).join("<br>")}</div>` : "") +
@@ -211,7 +213,7 @@ const F = () => $("#jobForm").elements;
 const STEP_NAMES = ["Krok 1 z 5 · Lokalizacje", "Krok 2 z 5 · Kierunek i usuwanie", "Krok 3 z 5 · Filtry i podfoldery", "Krok 4 z 5 · Harmonogram i warunki", "Krok 5 z 5 · Kosz, bezpieczeństwo i podsumowanie"];
 let step = 0;
 let vssInfo = { supported: false, admin: false, elevated_autostart: false };
-const DEFAULT_JOB = { use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, triggers: { on_drive: false, on_wake: false, on_network: false }, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
+const DEFAULT_JOB = { bandwidth: { kbps: 0, off_kbps: 0, hours: null }, use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, triggers: { on_drive: false, on_wake: false, on_network: false }, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
 
 function openEditor(job, tpl) {
   const f = F(); $("#edErr").textContent = "";
@@ -224,6 +226,7 @@ function openEditor(job, tpl) {
   f.sched.value = j.schedule.type;
   f.sched_val.value = j.schedule.type === "Interval" ? Math.round(j.schedule.secs / 60) : j.schedule.type === "Daily" ? `${String(j.schedule.hour).padStart(2, "0")}:${String(j.schedule.minute).padStart(2, "0")}` : j.schedule.type === "Realtime" ? Math.round(j.schedule.poll_secs / 60) : "";
   f.win_from.value = j.window ? j.window[0] : ""; f.win_to.value = j.window ? j.window[1] : "";
+  f.bw_kbps.value = j.bandwidth?.kbps || 0; f.bw_off.value = j.bandwidth?.off_kbps || 0; f.bw_from.value = j.bandwidth?.hours ? j.bandwidth.hours[0] : ""; f.bw_to.value = j.bandwidth?.hours ? j.bandwidth.hours[1] : "";
   f.use_trash.checked = j.trash_days > 0; f.trash_days.value = j.trash_days > 0 ? j.trash_days : 30; f.max_versions.value = j.max_versions || 0; f.verify.checked = !!j.verify;
   f.ac_only.checked = !!j.conditions?.ac_only; f.wifi.value = (j.conditions?.wifi || []).join("\n");
   f.on_drive.checked = !!j.triggers?.on_drive; f.on_wake.checked = !!j.triggers?.on_wake; f.on_network.checked = !!j.triggers?.on_network; trashToggle(); $("#tree").innerHTML = "";
@@ -267,6 +270,7 @@ function readJob() {
     max_size: f.max_mb.value === "" ? null : Math.round(Number(f.max_mb.value) * 1048576),
     schedule, window: from !== null && to !== null ? [from, to] : null, enabled: f.enabled.checked,
     guard_pct: Number(f.guard_pct.value) || 25, trash_days: f.use_trash.checked ? Math.max(1, Number(f.trash_days.value) || 30) : 0, max_versions: Number(f.max_versions.value) || 0, verify: f.verify.checked,
+    bandwidth: { kbps: Number(f.bw_kbps.value) || 0, off_kbps: Number(f.bw_off.value) || 0, hours: f.bw_from.value !== "" && f.bw_to.value !== "" ? [Number(f.bw_from.value), Number(f.bw_to.value)] : null },
     conditions: { ac_only: f.ac_only.checked, wifi: lines(f.wifi.value) }, triggers: { on_drive: f.on_drive.checked, on_wake: f.on_wake.checked, on_network: f.on_network.checked }, threads: Number(f.threads.value) || 4, use_vss: f.use_vss.checked,
   };
 }
@@ -279,6 +283,7 @@ function summarize(j) {
     if (j.no_delete_right) li.push("Po prawej stronie nic nie jest usuwane.");
     if (!j.no_delete_left && !j.no_delete_right) li.push(j.trash_days > 0 ? `Usunięte i nadpisane pliki trafiają do kosza na ${j.trash_days} dni${j.max_versions ? ` (maks. ${j.max_versions} wersji pliku)` : ""}.` : "Kosz wyłączony: usunięte i nadpisane pliki są tracone bez możliwości przywrócenia.");
   }
+  if (j.bandwidth?.kbps || j.bandwidth?.off_kbps) li.push(j.bandwidth.hours ? `Limit prędkości: ${j.bandwidth.kbps || "bez limitu"} KB/s w godzinach ${j.bandwidth.hours[0]}:00–${j.bandwidth.hours[1]}:00, poza nimi ${j.bandwidth.off_kbps || "bez limitu"} KB/s.` : `Limit prędkości: ${j.bandwidth.kbps} KB/s.`);
   if (j.verify) li.push("Po kopiowaniu sprawdzana jest suma kontrolna pliku.");
   if (j.conditions?.ac_only) li.push("Zadanie startuje tylko przy zasilaniu sieciowym.");
   if ((j.conditions?.wifi || []).length) li.push(`Zadanie startuje tylko w sieciach Wi-Fi: ${esc(j.conditions.wifi.join(", "))}.`);
@@ -444,7 +449,7 @@ function diffTree(planned) {
     for (const p of parts) { node = node.kids[p] ||= { kids: {}, items: [], n: 0 }; node.n++; }
     node.items.push([file, a]);
   }
-  const cls = (a) => (typeof a === "string" && a.startsWith("Delete") ? "warn" : typeof a !== "string" ? "bad" : "ok");
+  const cls = actCls;
   const render = (node, name, open) => {
     const items = node.items.map(([f, a]) => `<div style="padding:2px 0 2px 18px"><span class="kind ${cls(a)}">${ACTION(a)}</span> ${esc(f)}</div>`).join("");
     const kids = Object.entries(node.kids).sort(([a], [b]) => a.localeCompare(b, LOCALE)).map(([n, c]) => render(c, n, false)).join("");
@@ -534,8 +539,9 @@ $("#trashEmpty").onclick = async () => {
   try { st = await invoke("get_settings"); } catch {}
   $("#notify").checked = st.notify;
   $(`input[name=lang][value=${LANG}]`).checked = true;
-  const save = () => invoke("set_settings", { settings: { notify: $("#notify").checked, language: $("input[name=lang]:checked").value } }).catch((e) => toast(String(e), "bad"));
-  $("#notify").onchange = save;
+  $("#unavail").value = st.unavailable_minutes ?? 30;
+  const save = () => invoke("set_settings", { settings: { notify: $("#notify").checked, language: $("input[name=lang]:checked").value, unavailable_minutes: Number($("#unavail").value) || 0 } }).catch((e) => toast(String(e), "bad"));
+  $("#notify").onchange = save; $("#unavail").onchange = save;
   $$("input[name=lang]").forEach((r) => (r.onchange = () => { store.set("lang", r.value); save().then(() => location.reload()); }));
 })();
 async function checkUpdates(silent) {
@@ -558,4 +564,14 @@ $("#cfgExport").onclick = async () => {
 };
 $("#cfgImport").onclick = async () => {
   try { const p = await dialogApi.open({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] }); if (p) { toast(`Zaimportowano zadań: ${await invoke("import_config", { path: p })}`, "ok"); await refreshJobs(); } } catch (e) { toast(String(e), "bad"); }
+};
+
+// ---------- dziennik i diagnostyka ----------
+$("#logsOpen").onclick = () => invoke("open_logs_dir").catch((e) => toast(String(e), "bad"));
+$("#diagCopy").onclick = async () => {
+  try {
+    const text = await invoke("get_diagnostics");
+    try { await navigator.clipboard.writeText(text); toast("Diagnostyka skopiowana do schowka", "ok"); }
+    catch { $("#repTitle").textContent = "Diagnostyka"; $("#repBody").innerHTML = `<p class="muted">Zaznacz całość (Ctrl/Cmd+A) i skopiuj.</p><textarea readonly rows="18" style="font-family:monospace;font-size:12px">${esc(text)}</textarea>`; $("#report").showModal(); }
+  } catch (e) { toast(String(e), "bad"); }
 };

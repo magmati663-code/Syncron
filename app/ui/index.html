@@ -19,7 +19,7 @@
   <div class="grow"></div>
   <div class="side-foot">
     <button id="pauseAll" class="ghost"><span data-i="pause"></span><span class="l" id="pauseTxt">Wstrzymaj wszystko</span></button>
-    <div class="ver">SyncPolak 0.4.1</div>
+    <div class="ver">SyncPolak 0.5</div>
   </div>
 </aside>
 
@@ -77,10 +77,14 @@
         </div></div>
       <label class="sw"><input type="checkbox" id="autostart"><span>Uruchamiaj razem z systemem<small>Aplikacja startuje w tle, w zasobniku systemowym.</small></span></label>
       <label class="sw"><input type="checkbox" id="notify"><span>Powiadomienia systemowe<small>O błędach, zatrzymaniu przez zabezpieczenie i konfliktach.</small></span></label>
+      <label>Powiadom, gdy zadanie jest niedostępne dłużej niż (minuty, 0 = wyłączone)<input id="unavail" type="number" min="0"></label>
       <div class="form" style="gap:6px"><b>Język</b>
         <div class="choice c2"><label class="opt"><input type="radio" name="lang" value="pl"><b>Polski</b></label><label class="opt"><input type="radio" name="lang" value="en"><b>English</b></label></div></div>
       <div class="form" style="gap:8px"><b>Aktualizacje</b>
         <div class="pick"><button type="button" id="checkUpd">Sprawdź aktualizacje</button><span class="muted" id="updMsg"></span></div></div>
+      <div class="form" style="gap:8px"><b>Dziennik i diagnostyka</b>
+        <div class="pick"><button type="button" id="diagCopy">Skopiuj diagnostykę</button><button type="button" id="logsOpen">Otwórz folder dziennika</button></div>
+        <p class="muted">Diagnostyka zawiera wersję, system, stan zadań (bez ścieżek plików) i ostatnie wpisy dziennika — wklej ją w zgłoszeniu problemu.</p></div>
       <div class="form" style="gap:8px"><b>Kopia konfiguracji</b>
         <div class="pick"><button type="button" id="cfgExport"><span data-i="download"></span>Eksportuj zadania</button><button type="button" id="cfgImport">Importuj zadania</button></div>
         <p class="muted">Plik zawiera zadania i reguły. Hasła i tokeny kont chmurowych nie są eksportowane.</p></div>
@@ -182,6 +186,13 @@
         <div class="g2">
           <label>Blokada masowego usuwania (% plików)<input name="guard_pct" type="number" min="1" max="100"></label>
           <label>Równoległe transfery<input name="threads" type="number" min="1" max="16"></label>
+        </div>
+        <b>Limit prędkości transferu</b>
+        <div class="g2">
+          <label>Limit (KB/s, 0 = bez limitu)<input name="bw_kbps" type="number" min="0"></label>
+          <label>Limit poza godzinami (KB/s, 0 = bez limitu)<input name="bw_off" type="number" min="0"></label>
+          <label>Limit obowiązuje od godziny<input name="bw_from" type="number" min="0" max="23" placeholder="puste = zawsze"></label>
+          <label>do godziny<input name="bw_to" type="number" min="0" max="23" placeholder="puste = zawsze"></label>
         </div>
         <label class="sw"><input type="checkbox" name="enabled"><span>Zadanie włączone</span></label>
         <div class="summary" id="summary"></div>

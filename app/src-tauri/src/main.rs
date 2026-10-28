@@ -14,6 +14,144 @@ use tauri_plugin_autostart::MacosLauncher;
 
 type Res<T> = Result<T, String>;
 
+/// Prosty dziennik plikowy z rotacją (2 MB, 3 kopie): `logs/syncpolak.log` w folderze danych aplikacji.
+struct FileLogger {
+    path: std::path::PathBuf,
+    lock: std::sync::Mutex<()>,
+}
+
+impl FileLogger {
+    fn rotate(&self) {
+        if std::fs::metadata(&self.path)
+            .map(|m| m.len() > 2 * 1024 * 1024)
+            .unwrap_or(false)
+        {
+            for i in (1..3).rev() {
+                let _ = std::fs::rename(
+                    self.path.with_extension(format!("log.{i}")),
+                    self.path.with_extension(format!("log.{}", i + 1)),
+                );
+            }
+            let _ = std::fs::rename(&self.path, self.path.with_extension("log.1"));
+        }
+    }
+}
+
+impl log::Log for FileLogger {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Info
+    }
+    fn log(&self, r: &log::Record) {
+        if !self.enabled(r.metadata()) {
+            return;
+        }
+        use std::io::Write;
+        let _g = self.lock.lock().unwrap();
+        self.rotate();
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = writeln!(
+                f,
+                "[{}] {:<5} {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                r.level(),
+                r.args()
+            );
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn init_logging(dir: &std::path::Path) {
+    let logs = dir.join("logs");
+    let _ = std::fs::create_dir_all(&logs);
+    let logger = FileLogger {
+        path: logs.join("syncpolak.log"),
+        lock: std::sync::Mutex::new(()),
+    };
+    if log::set_boxed_logger(Box::new(logger)).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+    std::panic::set_hook(Box::new(|info| log::error!("PANIC: {info}")));
+    log::info!(
+        "SyncPolak {} uruchomiony ({} {})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+}
+
+fn kind_of(loc: &str) -> String {
+    match syncpolak_core::location::Location::parse(loc) {
+        syncpolak_core::location::Location::Rclone(s) => {
+            format!("chmura ({})", s.split(':').next().unwrap_or(""))
+        }
+        syncpolak_core::location::Location::Local(_)
+            if loc.starts_with("\\\\") || loc.starts_with("//") =>
+        {
+            "dysk sieciowy".into()
+        }
+        _ => "folder lokalny".into(),
+    }
+}
+
+/// Tekst diagnostyczny do wklejenia w zgłoszeniu: wersja, system, zadania (bez ścieżek) i końcówka dziennika.
+#[tauri::command]
+async fn get_diagnostics(r: State<'_, Runner>) -> Res<String> {
+    let runner = r.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut o = String::new();
+        o += &format!("SyncPolak {}\nSystem: {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+        o += &format!("rclone: {}\n", run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string()).unwrap_or_else(|e| format!("niedostępny ({e})")));
+        o += &format!("VSS: obsługa={}, administrator={}\n", vss::supported(), vss::is_admin());
+        let st = runner.status();
+        let jobs = runner.load_jobs();
+        o += &format!("\nZadania ({}), wstrzymane globalnie: {}\n", jobs.len(), runner.is_paused());
+        for j in &jobs {
+            let s = st.get(&j.id);
+            o += &format!(
+                "- „{}”: {} ⇄ {}, tryb {:?}, harmonogram {:?}, kosz {} dni, stan: {}{}\n",
+                j.name, kind_of(&j.left), kind_of(&j.right), j.mode, j.schedule, j.trash_days,
+                s.map(|s| s.state.clone()).unwrap_or_default(),
+                s.and_then(|s| s.error.clone()).map(|e| format!(", błąd: {e}")).unwrap_or_default()
+            );
+            if let Some(l) = s.and_then(|s| s.last.as_ref()) {
+                o += &format!("    ostatni przebieg: skopiowano {}, usunięto {}, przeniesiono {}, konflikty {}, zajęte {}, błędy {}{}\n",
+                    l.copied, l.deleted, l.moved, l.conflicts.len(), l.busy.len(), l.errors.len(),
+                    l.vss_note.as_ref().map(|n| format!(", VSS: {n}")).unwrap_or_default());
+            }
+        }
+        let log = std::fs::read_to_string(runner.state_dir().join("logs").join("syncpolak.log")).unwrap_or_default();
+        let tail: Vec<&str> = log.lines().rev().take(200).collect();
+        o += "\nOstatnie wpisy dziennika:\n";
+        o += &tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        Ok(o)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn open_logs_dir(r: State<Runner>) -> Res<()> {
+    let dir = r.state_dir().join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 struct Overview {
     paused: bool,
@@ -295,6 +433,12 @@ struct Settings {
     notify: bool,
     #[serde(default = "pl")]
     language: String,
+    /// Po ilu minutach niedostępności zadania wysłać powiadomienie (0 = wyłączone).
+    #[serde(default = "d30")]
+    unavailable_minutes: u32,
+}
+fn d30() -> u32 {
+    30
 }
 fn yes() -> bool {
     true
@@ -307,6 +451,7 @@ impl Default for Settings {
         Settings {
             notify: true,
             language: pl(),
+            unavailable_minutes: 30,
         }
     }
 }
@@ -437,6 +582,8 @@ fn spawn_notifier(app: tauri::AppHandle) {
     use tauri_plugin_notification::NotificationExt;
     std::thread::spawn(move || {
         let mut seen: HashMap<String, (String, usize)> = HashMap::new();
+        // od kiedy zadanie jest w stanie błędu (czas, czy wysłano powiadomienie o długiej niedostępności)
+        let mut down: HashMap<String, (std::time::Instant, bool)> = HashMap::new();
         loop {
             std::thread::sleep(std::time::Duration::from_secs(4));
             let r = app.state::<Runner>();
@@ -450,6 +597,50 @@ fn spawn_notifier(app: tauri::AppHandle) {
                     .map(|j| j.name.clone())
                     .unwrap_or(id.clone());
                 let conflicts = s.last.as_ref().map(|l| l.conflicts.len()).unwrap_or(0);
+                let say = |body: String| {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title(format!("SyncPolak — {name}"))
+                        .body(body)
+                        .show();
+                };
+                if s.state == "error" {
+                    let e = down
+                        .entry(id.clone())
+                        .or_insert((std::time::Instant::now(), false));
+                    let limit =
+                        std::time::Duration::from_secs(u64::from(st.unavailable_minutes) * 60);
+                    if st.notify && st.unavailable_minutes > 0 && !e.1 && e.0.elapsed() >= limit {
+                        e.1 = true;
+                        log::warn!(
+                            "zadanie „{name}” jest niedostępne od {} min",
+                            st.unavailable_minutes
+                        );
+                        say(if en {
+                            format!(
+                                "Unavailable for {} min: {}",
+                                st.unavailable_minutes,
+                                s.error.clone().unwrap_or_default()
+                            )
+                        } else {
+                            format!(
+                                "Niedostępne od {} min: {}",
+                                st.unavailable_minutes,
+                                s.error.clone().unwrap_or_default()
+                            )
+                        });
+                    }
+                } else if let Some((_, notified)) = down.remove(&id) {
+                    if notified && st.notify {
+                        log::info!("zadanie „{name}” znów działa");
+                        say(if en {
+                            "Back to normal.".to_string()
+                        } else {
+                            "Znów działa.".to_string()
+                        });
+                    }
+                }
                 let prev = seen.insert(id.clone(), (s.state.clone(), conflicts));
                 let Some((pstate, pconf)) = prev else {
                     continue;
@@ -536,6 +727,7 @@ fn main() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            init_logging(&dir);
             // własna konfiguracja rclone w folderze danych aplikacji
             std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
             locate_rclone(app.handle());
@@ -617,6 +809,8 @@ fn main() {
             trash_delete,
             list_dirs,
             export_config,
+            get_diagnostics,
+            open_logs_dir,
             import_config,
             restart_elevated,
             set_elevated_autostart

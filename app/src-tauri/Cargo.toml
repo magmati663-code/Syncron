@@ -1,6 +1,6 @@
 [package]
 name = "syncpolak-app"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "SyncPolak: synchronizacja folderów, dysków sieciowych i chmur"
 
@@ -19,3 +19,5 @@ tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+log = { version = "0.4", features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

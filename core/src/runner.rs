@@ -201,16 +201,19 @@ impl Runner {
                         .map(|d| d > Duration::from_secs(45))
                         .unwrap_or(false)
                     {
+                        log::info!("wykryto wybudzenie z uśpienia");
                         me.trigger("wake", None);
                     }
                     last = now;
                     let v = mounted_volumes();
                     for new in v.difference(&vols) {
+                        log::info!("podłączono wolumin {new}");
                         me.trigger("drive", Some(new));
                     }
                     vols = v;
                     let i = local_ip();
                     if i != ip && i.is_some() {
+                        log::info!("zmiana sieci: {ip:?} -> {i:?}");
                         me.trigger("network", None);
                     }
                     ip = i;
@@ -392,6 +395,7 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                 return;
             }
             if let Err(reason) = conditions::check(&job.conditions) {
+                log::info!("zadanie „{}”: czeka na warunki: {reason}", job.name);
                 set_status(&inner, &job.id, |s| {
                     s.state = "conditions".into();
                     s.note = Some(reason);
@@ -417,6 +421,27 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
             });
         };
         let res = run_job_with(&job, &dir, false, force, Some(&report));
+        match &res {
+            Ok(r) => {
+                let busy = r.busy.len();
+                if r.copied + r.deleted + r.moved + r.conflicts.len() + busy + r.errors.len() > 0
+                    || r.blocked.is_some()
+                {
+                    log::info!(
+                        "zadanie „{}”: skopiowano {}, usunięto {}, przeniesiono {}, konflikty {}, zajęte {}, błędy {}{}",
+                        job.name, r.copied, r.deleted, r.moved, r.conflicts.len(), busy, r.errors.len(),
+                        r.blocked.as_ref().map(|b| format!(", ZATRZYMANO: {b}")).unwrap_or_default()
+                    );
+                    for e in r.errors.iter().take(20) {
+                        log::warn!("zadanie „{}”: {e}", job.name);
+                    }
+                    if let Some(n) = &r.vss_note {
+                        log::warn!("zadanie „{}”: VSS: {n}", job.name);
+                    }
+                }
+            }
+            Err(e) => log::error!("zadanie „{}”: {e}", job.name),
+        }
         let mut retry = None;
         set_status(&inner, &job.id, |s| {
             s.last_run = Some(Local::now().timestamp());
@@ -474,6 +499,7 @@ fn job_loop(job: Job, rx: Receiver<Msg>, tx: Sender<Msg>, inner: Arc<Inner>, dir
                     _ => false,
                 };
                 if want {
+                    log::info!("zadanie „{}”: wyzwalacz „{kind}”", job.name);
                     thread::sleep(Duration::from_secs(3)); // dysk/sieć potrzebują chwili na ustabilizowanie
                     watcher = make_watcher(&job, tx.clone()); // dysk/sieć wróciły: nowy uchwyt
                     run(false, false, &mut next);
