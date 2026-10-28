@@ -598,7 +598,6 @@ fn r2_conflict_name_miesci_sie_w_255() {
 }
 
 #[test]
-#[ignore = "BUG: dwa konflikty KeepBoth tego samego pliku w jednym dniu - druga kopia konfliktowa nadpisuje pierwsza bez kopii zapasowej (trash_days=0 => utrata danych)"]
 fn r2_keep_both_dwa_konflikty_tego_samego_dnia() {
     let (_t, l, r, s) = setup();
     fs::write(l.join("a.txt"), "0").unwrap();
