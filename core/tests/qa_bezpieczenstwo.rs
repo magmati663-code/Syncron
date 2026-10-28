@@ -377,12 +377,11 @@ fn src_vss_temp_nie_jest_przewidywalny() {
 // ======================================================================
 
 #[test]
-#[ignore = "BUG T9-10: add_remote przekazuje hasła/tokeny jako argumenty procesu rclone (widoczne dla innych procesów/użytkowników)"]
 fn src_add_remote_nie_przekazuje_sekretow_w_argumentach() {
     let s = repo_file("app/src-tauri/src/main.rs");
     assert!(
-        s.contains("format!(\"{k}={v}\")"),
-        "zmieniono kod — zaktualizuj test"
+        s.contains("set_remote_keys"),
+        "sekrety powinny trafiać do pliku konfiguracji, nie do argv"
     );
     // poprawka: wartości wrażliwe przez zmienną środowiskową (RCLONE_CONFIG_<NAME>_PASS) albo stdin/`rclone obscure -`
     assert!(
@@ -392,7 +391,6 @@ fn src_add_remote_nie_przekazuje_sekretow_w_argumentach() {
 }
 
 #[test]
-#[ignore = "BUG T9-11: add_remote/test_remote/delete_remote nie walidują `kind` ani kluczy `params` (klucz '--...' staje się flagą rclone)"]
 fn src_add_remote_waliduje_kind_i_klucze() {
     let s = repo_file("app/src-tauri/src/main.rs");
     let start = s.find("async fn add_remote").unwrap();
