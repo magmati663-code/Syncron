@@ -24,6 +24,16 @@ const P = {
   right: '<path d="M5 12h14M12 5l7 7-7 7"/>',
   left: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  terminal: '<path d="m4 17 6-6-6-6M12 19h8"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
+  alert: '<path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  terminal: '<path d="m4 17 6-6-6-6M12 19h8"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
+  alert: '<path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${P[n] || ""}</svg>`;
@@ -46,7 +56,7 @@ function rel(t) {
 }
 const schedText = (s) => ({ Manual: "ręcznie", Realtime: "na bieżąco", Interval: `co ${Math.round((s.secs || 0) / 60)} min`, Daily: `codziennie ${String(s.hour).padStart(2, "0")}:${String(s.minute).padStart(2, "0")}` }[s.type] || "");
 function locKind(p) {
-  if (/^[^\\/:]{2,}:/.test(p) && !/^[A-Za-z]:[\\/]/.test(p)) return "cloud";
+  if (/^[^\\/:]{2,}:/.test(p) && !/^[A-Za-z]:[\\/]/.test(p)) return "network";
   if (/^(\\\\|\/\/|\/Volumes|\/mnt|\/net)/.test(p)) return "network";
   return "folder";
 }
@@ -63,10 +73,10 @@ function toast(msg, kind = "") {
 // ask() jest kolejkowane: drugie wywołanie czeka, aż użytkownik zamknie bieżące okno potwierdzenia
 // (inaczej nadpisywało treść i handlery otwartego okna, a odpowiedź trafiała do złego pytania).
 let askQueue = Promise.resolve();
-function ask(title, text, ok = "OK", danger = false) {
+function ask(title, text, ok = "OK", danger = false, no = "Anuluj") {
   const run = () => new Promise((res) => {
     $("#cfTitle").textContent = title; $("#cfText").textContent = text;
-    const y = $("#cfYes"); y.textContent = ok; y.className = danger ? "danger" : "primary";
+    $("#cfNo").textContent = no; const y = $("#cfYes"); y.textContent = ok; y.className = danger ? "danger" : "primary";
     const d = $("#confirm"); let fin = false;
     const done = (v) => { if (fin) return; fin = true; d.onclose = null; if (d.open) d.close(); res(v); };
     y.onclick = () => done(true); $("#cfNo").onclick = () => done(false); d.onclose = () => done(false);
@@ -91,7 +101,7 @@ function setHtml(el, html) { if (el._h === html) return false; el._h = html; el.
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 
 let jobs = [], remotes = [], overview = { paused: false, status: {} }, lastHist = [], lastKey = "", dryBusy = new Set();
-let jobsErr = "", overviewErr = false;
+let jobsErr = "", overviewErr = false, jobsLoaded = false;
 
 // ---------- motyw ----------
 function applyTheme(t) {
@@ -124,7 +134,7 @@ async function refreshJobs() {
     if (my !== jobsSeq) return;
     jobsErr = errText(e, "Nie udało się odczytać listy zadań."); warnOnce("list_jobs", "Nie udało się wczytać zadań: " + jobsErr);
   }
-  renderJobs(); fillHistJobs();
+  jobsLoaded = true; renderJobs(); fillHistJobs();
 }
 async function refreshStatus() {
   const my = ++statusSeq;
@@ -184,7 +194,7 @@ function cardParts(j) {
     cur = pr ? `${pr.done}/${pr.total} · ${pr.current}` : "";
     extra = `<div class="bar ${pct === null ? "ind" : ""}"><i></i></div><div class="cur"${pr ? " data-nt" : ""}>${pr ? "" : "Skanowanie…"}</div>`;
   }
-  if (st.error) extra += `<div class="msg" data-nt>${esc(st.error)}</div>`;
+  if (st.error) extra += `<div class="msg" role="alert"><span data-nt>${esc(st.error)}</span><span class="todo">Co zrobić: sprawdź, czy obie lokalizacje są dostępne, i uruchom zadanie ponownie. Szczegóły znajdziesz w zakładce „Aktywność”.</span></div>`;
   else if (rep?.blocked) extra += `<div class="msg warn"><b>Zatrzymano ze względów bezpieczeństwa:</b> <span data-nt>${esc(rep.blocked)}</span>. Sprawdź „Symulację”; „Wymuś” pominie blokadę.</div>`;
   else if (st.state === "conditions" && st.note) extra += `<div class="msg warn">Czeka na warunki: ${esc(st.note)}</div>`;
   else if (rep?.busy.length) extra += `<div class="msg warn">${rep.busy.length} plik(ów) jest zajętych przez inne programy — ponowię automatycznie.${rep.vss_note ? `<br><b>VSS:</b> <span data-nt>${esc(rep.vss_note)}</span>` : ""}</div>`;
@@ -210,18 +220,20 @@ function patchProgress(el, p) {
   const c = el.querySelector(".cur"); if (c && p.cur && c.textContent !== p.cur) c.textContent = p.cur;
 }
 function renderJobs() {
-  renderTiles();
   const box = $("#jobs");
+  $("#tab-jobs").classList.toggle("is-empty", !jobs.length);
+  renderTiles();
   if (!jobs.length) {
     box._cards = null;
+    if (!jobsLoaded && !jobsErr) { setHtml(box, `<div class="skel" aria-busy="true" aria-label="Wczytywanie zadań…">${'<div class="sk-card"><i class="sk w40"></i><i class="sk"></i><i class="sk w70"></i></div>'.repeat(2)}</div>`); return; }
     if (jobsErr) {
       setHtml(box, `<div class="box empty"><h2>Nie udało się wczytać zadań</h2><p class="err" data-nt>${esc(jobsErr)}</p><p><button class="primary" id="jobsRetry">Spróbuj ponownie</button></p></div>`);
       return;
     }
     setHtml(box, `<div class="box empty"><svg class="big" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${P.sync}</svg>
-      <h2>Zsynchronizuj pierwsze foldery</h2><p class="sub">Wybierz gotowy szablon albo utwórz zadanie od zera.</p>
+      <h2>Zsynchronizuj pierwsze foldery</h2><p class="sub">Zadanie łączy dwie lokalizacje: folder, dysk sieciowy lub konto zdalne. Wybierz gotowy szablon albo zacznij od zera.</p>
       <div class="tpls">${TEMPLATES.map((t) => `<button class="tpl" data-tpl="${t.id}"><b>${esc(t.title)}</b><span>${esc(t.text)}</span></button>`).join("")}</div>
-      <p><button class="primary" id="emptyNew"><span>${icon("plus")}</span>Nowe zadanie</button></p></div>`);
+      <p class="cta"><button class="primary" id="emptyNew"><span>${icon("plus")}</span>Nowe zadanie</button><button id="emptyAcc"><span>${icon("network")}</span>Dodaj konto zdalne</button></p></div>`);
     return;
   }
   if (!box._cards) { box.innerHTML = ""; box._h = null; box._cards = new Map(); }
@@ -248,6 +260,7 @@ $("#jobs").addEventListener("click", async (e) => {
   const tpl = e.target.closest("[data-tpl]");
   if (tpl) return openEditor(null, TEMPLATES.find((t) => t.id === tpl.dataset.tpl).job);
   if (e.target.closest("#emptyNew")) return openEditor(null);
+  if (e.target.closest("#emptyAcc")) return gotoTab("accounts");
   if (e.target.closest("#jobsRetry")) { await refreshJobs(); return refreshStatus(); }
   const b = e.target.closest("button[data-act]"); if (!b) return;
   const id = b.closest(".card").dataset.id, job = jobs.find((j) => j.id === id); if (!job) return;
@@ -361,7 +374,7 @@ const CU_ROWS = { left_only: ["Tylko po lewej", "Plik istnieje tylko po lewej st
 const CU_ACTS = { Skip: "Pomiń", CopyToRight: "Kopiuj w prawo →", CopyToLeft: "← Kopiuj w lewo", DeleteLeft: "Usuń po lewej", DeleteRight: "Usuń po prawej" };
 const CU_ACT_TXT = { Skip: "pomiń", CopyToRight: "kopiuj w prawo", CopyToLeft: "kopiuj w lewo", DeleteLeft: "usuń po lewej", DeleteRight: "usuń po prawej" };
 const CU_CAT_TXT = { left_only: "tylko po lewej", right_only: "tylko po prawej", left_newer: "nowszy po lewej", right_newer: "nowszy po prawej", different: "różne przy tym samym czasie" };
-const CMP_HINT = { TimeAndSize: "Plik jest taki sam, gdy zgadzają się czas modyfikacji (w tolerancji) i rozmiar. Szybkie — zawartość nie jest czytana.", SizeOnly: "Liczy się tylko rozmiar. Najszybsze, ale zmiana pliku bez zmiany rozmiaru zostanie przeoczona.", Content: "Porównywana jest zawartość pliku (suma BLAKE3). Najdokładniejsze, ale wolne: każdy plik jest czytany w całości. W chmurze używane są sumy kontrolne dostawcy, jeśli je podaje." };
+const CMP_HINT = { TimeAndSize: "Plik jest taki sam, gdy zgadzają się czas modyfikacji (w tolerancji) i rozmiar. Szybkie — zawartość nie jest czytana.", SizeOnly: "Liczy się tylko rozmiar. Najszybsze, ale zmiana pliku bez zmiany rozmiaru zostanie przeoczona.", Content: "Porównywana jest zawartość pliku (suma BLAKE3). Najdokładniejsze, ale wolne: każdy plik jest czytany w całości. Dla kont zdalnych używane są sumy kontrolne serwera, jeśli je podaje." };
 const CMP_TXT = { TimeAndSize: "czas modyfikacji i rozmiar", SizeOnly: "tylko rozmiar (najszybsze, może przeoczyć zmiany)", Content: "zawartość plików (wolniejsze, dokładniejsze)" };
 $("#customRows").innerHTML = CU_KEYS.map((k) => `<div class="crow"><div><b>${CU_ROWS[k][0]}</b><span class="muted">${CU_ROWS[k][1]}</span></div><select name="cu_${k}" aria-label="${CU_ROWS[k][0]}">${Object.entries(CU_ACTS).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>`).join("");
 
@@ -424,7 +437,7 @@ document.addEventListener("change", liveForm); document.addEventListener("input"
 function schedHint() {
   const f = F(), t = f.sched.value, l = $("#schedVal");
   l.style.display = t === "Manual" ? "none" : "";
-  $("#schedLbl").textContent = t === "Interval" ? "Co ile minut" : t === "Daily" ? "O której godzinie (GG:MM)" : "Dodatkowe sprawdzanie co ile minut (dyski sieciowe i chmura)";
+  $("#schedLbl").textContent = t === "Interval" ? "Co ile minut" : t === "Daily" ? "O której godzinie (GG:MM)" : "Dodatkowe sprawdzanie co ile minut (dyski sieciowe i konta zdalne)";
   f.sched_val.placeholder = t === "Daily" ? "02:30" : "5";
 }
 $$("input[name=sched]").forEach((r) => r.addEventListener("change", schedHint));
@@ -597,7 +610,7 @@ async function checkPath(side) {
 }
 ["left", "right"].forEach((s) => F()[s].addEventListener("change", () => checkPath(s)));
 function fillRemoteSelects() {
-  $$("select[data-remote]").forEach((s) => { s.innerHTML = '<option value="">Konto chmurowe…</option>' + remotes.map((r) => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.kind)})</option>`).join(""); });
+  $$("select[data-remote]").forEach((s) => { s.innerHTML = '<option value="">Konto…</option>' + remotes.map((r) => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.kind)})</option>`).join(""); });
 }
 
 $("#jobForm").addEventListener("submit", async (e) => {
@@ -645,7 +658,7 @@ function histRows() {
 function renderHistory() {
   const rows = histRows();
   $("#hist tbody").innerHTML = histErr ? `<tr><td colspan="5" class="err" data-nt>${esc("Nie udało się wczytać historii: " + histErr)}</td></tr>`
-    : rows.map((h) => `<tr><td>${fmtTime(h.ts)}</td><td data-nt>${esc(histName(h.job))}</td><td><span class="kind ${kindClass(h.kind)}">${esc(h.kind)}</span></td><td data-nt>${esc(h.path)}</td><td class="muted" data-nt>${esc(trX(h.detail))}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">Brak wpisów.</td></tr>';
+    : rows.map((h) => `<tr><td>${fmtTime(h.ts)}</td><td data-nt>${esc(histName(h.job))}</td><td><span class="kind ${kindClass(h.kind)}">${esc(h.kind)}</span></td><td data-nt>${esc(h.path)}</td><td class="muted" data-nt>${esc(trX(h.detail))}</td></tr>`).join("") || `<tr><td colspan="5" class="muted emptyrow">${$("#histQ").value.trim() ? "Brak wpisów pasujących do wyszukiwania." : "Historia jest pusta — wpisy pojawią się po pierwszej synchronizacji."}</td></tr>`;
   const n = $("#histNote"), full = !histErr && lastHist.length >= HIST_LIMIT;
   n.hidden = !full;
   n.textContent = full ? `Pokazano najnowsze ${HIST_LIMIT} wpisów (limit widoku) — starsze są pominięte. Eksport CSV obejmuje tylko wpisy widoczne po filtrze.` : "";
@@ -681,29 +694,43 @@ $("#exportCsv").onclick = () => {
 };
 
 // ---------- konta ----------
-const KIND_LOOK = { gdrive: ["#4285f4", "G"], drive: ["#4285f4", "G"], onedrive: ["#0078d4", "O"], dropbox: ["#0061ff", "D"], webdav: ["#64748b", "W"], sftp: ["#16a34a", "S"], ftp: ["#ea580c", "F"], ftps: ["#c2410c", "F"], s3: ["#f59e0b", "S3"] };
+const KIND_LOOK = { webdav: ["globe", "WebDAV"], sftp: ["terminal", "SFTP"], ftp: ["both", "FTP"], ftps: ["lock", "FTPS"], s3: ["database", "S3"] };
+const kindLook = (k) => KIND_LOOK[k] || ["network", String(k || "").toUpperCase()];
+const kindCls = (k) => (KIND_LOOK[k] ? "k-" + k : "k-x");
+let editingRemote = null;
 let kinds = [], curKind = null;
 async function loadKinds() {
   try { kinds = await invoke("remote_kinds"); } catch (e) { kinds = []; $("#providers").innerHTML = `<span class="err" data-nt>${esc(errText(e, "Nie udało się wczytać listy usług."))}</span>`; return; }
-  $("#providers").innerHTML = kinds.map((p) => { const [c, m] = KIND_LOOK[p.kind] || ["#64748b", p.label.slice(0, 1)]; return `<button class="prov" data-p="${esc(p.kind)}"><span class="pi" style="background:${c}">${esc(m)}</span><b data-nt>${esc(p.label)}</b><span class="muted" style="font-weight:500;font-size:12px">${esc(p.oauth ? "Logowanie w przeglądarce" : p.help)}</span></button>`; }).join("");
+  $("#providers").innerHTML = kinds.map((p) => `<button class="prov" data-p="${esc(p.kind)}"><span class="pi ${kindCls(p.kind)}">${icon(kindLook(p.kind)[0])}</span><b data-nt>${esc(p.label)}</b><span class="muted prov-h">${esc(p.oauth ? "Logowanie w przeglądarce" : p.help)}</span></button>`).join("");
 }
 function fieldHtml(f) {
   const id = "rf_" + f.key, req = f.required ? '<b aria-hidden="true"> *</b>' : "", help = f.help ? `<span class="muted" style="font-weight:400;font-size:12px;display:block">${esc(f.help)}</span>` : "";
   if (f.kind === "bool") return `<label style="flex-direction:row;display:flex;gap:8px;align-items:center"><input type="checkbox" id="${id}" data-f="${esc(f.key)}" data-ty="bool" ${f.default === "true" ? "checked" : ""}><span>${esc(f.label)}</span></label>${f.warn ? `<div class="msg warn" role="alert" id="${id}_w" hidden>${esc(f.warn)}</div>` : ""}${help}`;
-  if (f.kind === "select") return `<label>${esc(f.label)}${req}<select id="${id}" data-f="${esc(f.key)}" data-ty="select">${f.options.map((o) => `<option value="${esc(o.value)}" ${o.value === f.default ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>${help}</label>`;
-  if (f.kind === "password") return `<label>${esc(f.label)}${req}<span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="password" type="password" autocomplete="new-password" style="flex:1"><button type="button" class="sm ghost" data-eye="${id}" aria-label="Pokaż hasło" aria-pressed="false">Pokaż</button></span>${help}</label>`;
-  if (f.kind === "file" || f.kind === "folder") return `<label>${esc(f.label)}${req}<span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="text" style="flex:1"><button type="button" class="sm" data-file="${id}" data-dir="${f.kind === "folder" ? 1 : 0}">Wybierz…</button></span>${help}</label>`;
+  if (f.kind === "select") return `<label><span>${esc(f.label)}${req}</span><select id="${id}" data-f="${esc(f.key)}" data-ty="select">${f.options.map((o) => `<option value="${esc(o.value)}" ${o.value === f.default ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>${help}</label>`;
+  if (f.kind === "password") return `<label><span>${esc(f.label)}${req}</span><span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="password" type="password" autocomplete="new-password" style="flex:1"><button type="button" class="sm ghost" data-eye="${id}" aria-label="Pokaż hasło" aria-pressed="false">Pokaż</button></span>${help}</label>`;
+  if (f.kind === "file" || f.kind === "folder") return `<label><span>${esc(f.label)}${req}</span><span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="text" style="flex:1"><button type="button" class="sm" data-file="${id}" data-dir="${f.kind === "folder" ? 1 : 0}">Wybierz…</button></span>${help}</label>`;
   const num = f.kind === "number" ? ` type="number" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""}` : ' type="text"';
-  return `<label>${esc(f.label)}${req}<input id="${id}" data-f="${esc(f.key)}" data-ty="${esc(f.kind)}"${num} value="${esc(f.default && f.kind === "number" ? f.default : "")}" placeholder="${esc(f.kind === "text" && f.default ? f.default : "")}">${help}</label>`;
+  return `<label><span>${esc(f.label)}${req}</span><input id="${id}" data-f="${esc(f.key)}" data-ty="${esc(f.kind)}"${num} value="${esc(f.default && f.kind === "number" ? f.default : "")}" placeholder="${esc(f.kind === "text" && f.default ? f.default : "")}">${help}</label>`;
 }
-$("#providers").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-p]"); if (!b) return;
-  curKind = kinds.find((p) => p.kind === b.dataset.p); if (!curKind) return;
-  $$(".prov").forEach((x) => x.classList.toggle("sel", x === b));
-  $("#rForm").hidden = false; $("#rName").value = curKind.kind; $("#rMsg").textContent = "";
-  $("#rAdd").textContent = curKind.oauth ? "Zaloguj przez przeglądarkę" : "Połącz konto";
+function selectKind(kind, edit) {
+  curKind = kinds.find((p) => p.kind === kind); if (!curKind) return;
+  editingRemote = edit ? edit.name : null;
+  $$(".prov").forEach((x) => x.classList.toggle("sel", x.dataset.p === kind && !edit));
+  $("#rForm").hidden = false; $("#rName").value = edit ? edit.name : curKind.kind; $("#rName").readOnly = !!edit; $("#rMsg").textContent = "";
+  $("#rFormTitle").textContent = edit ? "Edycja konta" : "Nowe konto";
+  $("#rAdd").textContent = edit ? "Zapisz zmiany" : curKind.oauth ? "Zaloguj przez przeglądarkę" : "Połącz konto";
   $("#rFields").innerHTML = (curKind.oauth ? '<p class="muted">Po kliknięciu „Zaloguj przez przeglądarkę” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>' : "") + curKind.fields.map(fieldHtml).join("");
-});
+  if (edit) {
+    for (const f of curKind.fields) {
+      const i = $("#rf_" + f.key); if (!i) continue;
+      if (f.secret || f.kind === "password") { i.placeholder = "Zostaw puste, aby nie zmieniać"; continue; }
+      const v = edit.params?.[f.key]; if (v == null) continue;
+      if (f.kind === "bool") { i.checked = v === "true"; const w = $("#" + i.id + "_w"); if (w) w.hidden = !i.checked; } else i.value = v;
+    }
+  }
+  $("#rForm").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+$("#providers").addEventListener("click", (e) => { const b = e.target.closest("[data-p]"); if (b) selectKind(b.dataset.p, null); });
 $("#rFields").addEventListener("click", async (e) => {
   const eye = e.target.closest("[data-eye]"), fb = e.target.closest("[data-file]");
   if (eye) { const i = $("#" + eye.dataset.eye), show = i.type === "password"; i.type = show ? "text" : "password"; eye.textContent = show ? "Ukryj" : "Pokaż"; eye.setAttribute("aria-pressed", show); }
@@ -723,11 +750,15 @@ function collectRemote() {
 $("#rAdd").onclick = async () => {
   if ($("#rAdd").disabled || !curKind) return;
   const name = $("#rName").value.trim(), params = collectRemote();
-  for (const f of curKind.fields) if (f.required && !params[f.key]) { $("#rMsg").textContent = `Uzupełnij pole „${f.label}”.`; return; }
+  for (const f of curKind.fields) if (f.required && !params[f.key] && !(editingRemote && (f.secret || f.kind === "password"))) { $("#rMsg").textContent = `Uzupełnij pole „${f.label}”.`; return; }
   for (const f of curKind.fields) if (f.kind === "number" && params[f.key] !== "") { const n = Number(params[f.key]); if (!Number.isInteger(n) || (f.min != null && n < f.min) || (f.max != null && n > f.max)) { $("#rMsg").textContent = `Pole „${f.label}” poza zakresem (${f.min ?? ""}–${f.max ?? ""}).`; return; } }
-  if (remotes.some((r) => r.name === name) && !(await ask("Nadpisać istniejące konto?", `Konto „${name}” już istnieje. Dodanie konta pod tą samą nazwą nadpisze jego konfigurację. Aby tego uniknąć, zmień nazwę.`, "Nadpisz", true))) return;
-  $("#rMsg").textContent = curKind.oauth ? "Czekam na logowanie w przeglądarce…" : "Łączenie…"; $("#rAdd").disabled = true;
-  try { await invoke("add_remote", { name, kind: curKind.kind, params }); $("#rMsg").textContent = ""; $("#rForm").hidden = true; toast("Konto dodane", "ok"); await loadRemotes(); }
+  if (!editingRemote && remotes.some((r) => r.name === name) && !(await ask("Nadpisać istniejące konto?", `Konto „${name}” już istnieje. Dodanie konta pod tą samą nazwą nadpisze jego konfigurację. Aby tego uniknąć, zmień nazwę.`, "Nadpisz", true))) return;
+  $("#rMsg").textContent = editingRemote ? "Zapisuję…" : curKind.oauth ? "Czekam na logowanie w przeglądarce…" : "Łączenie…"; $("#rAdd").disabled = true;
+  try {
+    if (editingRemote) { await invoke("update_remote", { name: editingRemote, params }); toast("Konto zapisane", "ok"); }
+    else { await invoke("add_remote", { name, kind: curKind.kind, params }); toast("Konto dodane", "ok"); }
+    $("#rMsg").textContent = ""; $("#rForm").hidden = true; editingRemote = null; await loadRemotes();
+  }
   catch (e) { $("#rMsg").textContent = "Błąd: " + errText(e); }
   $("#rAdd").disabled = false;
 };
@@ -738,7 +769,9 @@ async function loadRemotes() {
   catch (e) { if (my !== remotesSeq) return; err = errText(e, "Nie udało się odczytać listy kont."); warnOnce("list_remotes", "Nie udało się wczytać kont: " + err); }
   fillRemoteSelects(); updateBrowseBtns();
   $("#remotes").innerHTML = err ? `<span class="err" data-nt>${esc("Nie udało się wczytać kont: " + err)}</span>`
-    : remotes.length ? remotes.map((r) => `<div class="remote" style="flex-wrap:wrap"><span class="loc" style="padding:0;border:0;background:none"><span class="ic">${icon("cloud")}</span></span><div class="grow"><b data-nt>${esc(r.name)}:</b> <span class="muted" data-nt>${esc(r.kind)}</span></div><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm" data-b="${esc(r.name)}">Przeglądaj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button><div class="rtest muted" style="flex-basis:100%" data-rt="${esc(r.name)}" role="status"></div></div>`).join("") : '<span class="muted">Brak połączonych kont. Wybierz usługę poniżej.</span>';
+    : remotes.length ? remotes.map((r) => { const [ic, lbl] = kindLook(r.kind), kc = kindCls(r.kind), host = r.params?.host || r.params?.url || r.params?.bucket || "";
+      return `<div class="remote"><span class="kic ${kc}" aria-hidden="true">${icon(ic)}</span><div class="grow"><div class="rn"><b data-nt>${esc(r.name)}:</b> <span class="kchip ${kc}">${esc(lbl)}</span>${r.needs_login ? `<span class="kind warn">${icon("alert")}Wpisz hasło ponownie</span>` : ""}</div>${host ? `<div class="muted rh" data-nt>${esc(host)}</div>` : ""}</div><div class="ra"><button class="sm${r.needs_login ? " primary" : ""}" data-e="${esc(r.name)}">${icon("edit")}Edytuj</button><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm" data-b="${esc(r.name)}">Przeglądaj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button></div><div class="rtest muted" data-rt="${esc(r.name)}" role="status"></div></div>`; }).join("")
+      : `<div class="empty sm"><span class="kic k-x big" aria-hidden="true">${icon("network")}</span><h2>Nie masz jeszcze kont</h2><p class="sub">Dodaj serwer FTP, SFTP, WebDAV lub S3, aby synchronizować z nim foldery. Wybierz rodzaj konta poniżej.</p></div>`;
 }
 function showTest(name, res) {
   const el = $$("#remotes [data-rt]").find((x) => x.dataset.rt === name); if (!el) return;
@@ -747,13 +780,43 @@ function showTest(name, res) {
   else { el.className = "rtest err"; el.innerHTML = `<b>Błąd połączenia.</b> ${res.hint ? `<span>${esc(res.hint)}</span> ` : ""}<span class="muted" data-nt>${esc(res.error || "")}</span> <span class="muted">(${esc(res.ms ?? 0)} ms)</span>`; }
 }
 $("#remotes").addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d, br = e.target.closest("[data-b]")?.dataset.b;
+  const ed = e.target.closest("[data-e]")?.dataset.e, t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d, br = e.target.closest("[data-b]")?.dataset.b;
   try {
     if (t) { const btn = e.target.closest("[data-t]"); btn.disabled = true; showTest(t, "Testuję…"); try { showTest(t, await invoke("test_remote", { name: t })); } catch (err) { showTest(t, { ok: false, error: errText(err), hint: "", ms: 0 }); } btn.disabled = false; }
+    if (ed) { const r = remotes.find((x) => x.name === ed); if (r) selectKind(r.kind, r); }
     if (br) openBrowser(br, "", null);
-    if (d && (await ask("Usunąć konto?", `Konto „${d}” zostanie usunięte z aplikacji (dane w chmurze zostają).`, "Usuń", true))) { await invoke("delete_remote", { name: d }); await loadRemotes(); }
+    if (d && (await ask("Usunąć konto?", `Konto „${d}” zostanie usunięte z aplikacji (dane na serwerze zostają).`, "Usuń", true))) { await invoke("delete_remote", { name: d }); await loadRemotes(); }
   } catch (err) { toast("Błąd: " + errText(err), "bad"); loadRemotes(); }
 });
+
+// ---------- import kont z rclone.conf (migracja ze starszej wersji) ----------
+function importReportHtml(rep) {
+  const li = (a) => a.map((x) => `<li data-nt>${esc(x)}</li>`).join("");
+  const sk = (rep.skipped || []).map((x) => `<li><b data-nt>${esc(x.name)}</b> — <span data-nt>${esc(x.reason)}</span></li>`).join("");
+  return `<p><b>Utworzone konta: ${(rep.imported || []).length + (rep.needs_login || []).length}</b></p>` + ((rep.imported || []).length ? `<ul>${li(rep.imported)}</ul>` : "")
+    + ((rep.needs_login || []).length ? `<p class="msg warn">Te konta wymagają ponownego wpisania hasła (użyj przycisku „Edytuj”):</p><ul>${li(rep.needs_login)}</ul>` : "")
+    + (sk ? `<p><b>Pominięte: ${rep.skipped.length}</b></p><ul>${sk}</ul>` : "")
+    + ((rep.warnings || []).length ? `<ul class="muted">${li(rep.warnings)}</ul>` : "")
+    + (rep.source_removed ? '<p class="muted">Stary plik został usunięty.</p>' : "");
+}
+async function runRcloneImport(path) {
+  try {
+    const rep = await invoke("import_rclone_conf", { path: path || null, removeSource: false });
+    $("#repRun").hidden = true; $("#repTitle").textContent = "Import kont"; $("#repBody").innerHTML = importReportHtml(rep); $("#report").showModal();
+    await loadRemotes();
+  } catch (e) { toast("Nie udało się zaimportować kont: " + errText(e), "bad"); }
+}
+$("#rcImport").onclick = async () => {
+  try { const p = await dialogApi.open({ multiple: false, directory: false, filters: [{ name: "rclone.conf", extensions: ["conf"] }] }); if (p) await runRcloneImport(p); }
+  catch (e) { toast(errText(e), "bad"); }
+};
+(async () => {
+  let p = null;
+  try { p = await invoke("rclone_import_offer"); } catch {}
+  if (!p) return;
+  if (await ask("Zaimportować konta?", "Wykryto konta ze starej wersji (rclone.conf). Zaimportować FTP/SFTP/WebDAV/S3? Konta Google Drive/OneDrive/Dropbox nie są już obsługiwane.", "Importuj", false, "Nie teraz")) await runRcloneImport(null);
+  else { try { await invoke("rclone_import_dismiss"); } catch {} }
+})();
 
 // ---------- przeglądarka folderów zdalnych ----------
 let rb = { name: "", path: "", side: null, seq: 0 };
@@ -771,7 +834,7 @@ async function browseTo(path) {
     const list = await invoke("browse_remote", { name: rb.name, path });
     if (my !== rb.seq) return;
     $("#rbMsg").textContent = list.length ? "" : "Brak podfolderów.";
-    $("#rbList").innerHTML = list.filter((x) => x.is_dir !== false).map((x) => `<button type="button" class="sm ghost" role="listitem" style="display:block;width:100%;text-align:left" data-dir="${esc(x.name)}"><span class="ic">${icon("folder")}</span> <span data-nt>${esc(x.name)}</span></button>`).join("");
+    $("#rbList").innerHTML = list.filter((x) => x.is_dir !== false).map((x) => `<button type="button" class="sm ghost rbi" role="listitem" data-dir="${esc(x.name)}">${icon("folder")}<span data-nt>${esc(x.name)}</span></button>`).join("");
   } catch (e) { if (my !== rb.seq) return; $("#rbMsg").textContent = "Nie udało się wczytać folderów: " + errText(e); }
 }
 $("#rbList").addEventListener("click", (e) => { const b = e.target.closest("[data-dir]"); if (b) browseTo(rb.path ? rb.path + "/" + b.dataset.dir : b.dataset.dir); });
@@ -792,7 +855,6 @@ $("#pauseAll").onclick = async () => {
 (async () => {
   try { $("#autostart").checked = await autostart.isEnabled(); } catch {}
   $("#autostart").onchange = async (e) => { try { e.target.checked ? await autostart.enable() : await autostart.disable(); } catch (err) { toast(String(err), "bad"); } };
-  try { $("#rcv").textContent = await invoke("rclone_version"); } catch { $("#rcv").textContent = "niedostępny (foldery lokalne i dyski sieciowe działają; chmury wymagają rclone)"; }
 })();
 async function loadVss() {
   try { vssInfo = await invoke("vss_status"); } catch {}
@@ -860,7 +922,7 @@ async function loadTrash() {
   fillTrashJobs();
   const my = ++trashSeq, id = $("#trashJob").value, job = jobs.find((j) => j.id === id);
   trashItems = []; trashShown = "";
-  if (!job) { $("#trashTbl tbody").innerHTML = '<tr><td colspan="5" class="muted">Brak zadań.</td></tr>'; return; }
+  if (!job) { $("#trashTbl tbody").innerHTML = '<tr><td colspan="5" class="muted emptyrow">Nie masz jeszcze zadań. Utwórz zadanie w zakładce „Zadania”.</td></tr>'; return; }
   $("#trashNote").textContent = job.trash_days > 0 ? `Kosz tego zadania jest włączony (${job.trash_days} dni${job.max_versions ? `, maks. ${job.max_versions} wersji pliku` : ""}).` : "Kosz tego zadania jest wyłączony — nowe pliki nie są odkładane. Włącz go w edycji zadania (krok 5).";
   $("#trashTbl tbody").innerHTML = '<tr><td colspan="5" class="muted">Wczytywanie…</td></tr>';
   let items;
@@ -877,7 +939,7 @@ function renderTrash() {
   const rows = Object.values(byFile).sort((a, b) => a[0].path.localeCompare(b[0].path, LOCALE)).flatMap((vs) =>
     vs.sort((a, b) => b.stamp.localeCompare(a.stamp)).map((it, i) => `<tr><td>${i === 0 ? `<b data-nt>${esc(it.path)}</b>${vs.length > 1 ? ` <span class="muted">(${vs.length} wersji)</span>` : ""}` : ""}</td><td>${it.side === "left" ? "lewa" : "prawa"}</td><td>${esc(stampDate(it.stamp))}</td><td>${fmtSize(it.size)}</td>
       <td style="white-space:nowrap"><button class="sm" data-tr="restore" data-job="${esc(trashShown)}" data-side="${it.side}" data-stamp="${esc(it.stamp)}" data-path="${esc(it.path)}">Przywróć</button> <button class="sm danger" data-tr="del" data-job="${esc(trashShown)}" data-side="${it.side}" data-stamp="${esc(it.stamp)}" data-path="${esc(it.path)}">Usuń</button></td></tr>`));
-  $("#trashTbl tbody").innerHTML = rows.join("") || '<tr><td colspan="5" class="muted">Kosz jest pusty.</td></tr>';
+  $("#trashTbl tbody").innerHTML = rows.join("") || '<tr><td colspan="5" class="muted emptyrow">Kosz jest pusty. Pliki usunięte lub nadpisane przez synchronizację pojawią się tu i będzie można je przywrócić.</td></tr>';
 }
 $("#trashJob").onchange = loadTrash; $("#trashQ").oninput = renderTrash;
 $("#trashTbl").addEventListener("click", async (e) => {

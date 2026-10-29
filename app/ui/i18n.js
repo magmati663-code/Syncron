@@ -100,7 +100,7 @@
     "Krok 4 z 5 · Harmonogram i warunki": "Step 4 of 5 · Schedule & conditions", "Krok 5 z 5 · Kosz, bezpieczeństwo i podsumowanie": "Step 5 of 5 · Trash, safety & summary",
     "Podaj obie lokalizacje.": "Enter both locations.", "Lewa i prawa lokalizacja nie mogą być takie same.": "Left and right locations can't be the same.",
     "Podaj godzinę w formacie GG:MM, np. 02:30.": "Enter the time as HH:MM, e.g. 02:30.",
-    "Co ile minut": "Every how many minutes", "O której godzinie (GG:MM)": "At what time (HH:MM)", "Dodatkowe sprawdzanie co ile minut (dyski sieciowe i chmura)": "Extra check every how many minutes (network drives and cloud)",
+    "Co ile minut": "Every how many minutes", "O której godzinie (GG:MM)": "At what time (HH:MM)", "Dodatkowe sprawdzanie co ile minut (dyski sieciowe i konta zdalne)": "Extra check every how many minutes (network drives and remote accounts)",
     // karty, stany, szablony
     "Aktywne zadania": "Active jobs", "Ostatnia synchronizacja": "Last synchronization", "Stan": "Status",
     "Gotowe": "Ready", "Synchronizuję": "Syncing", "Czeka na pliki": "Waiting for files", "Błąd": "Error", "Zatrzymane": "Stopped", "Wstrzymane": "Paused", "Wyłączone": "Disabled", "Czeka na warunki": "Waiting for conditions",
@@ -166,7 +166,7 @@
     "Czas modyfikacji i rozmiar (domyślnie)": "Modification time and size (default)", "Tylko rozmiar": "Size only", "Zawartość pliku (suma kontrolna)": "File content (checksum)",
     "Plik jest taki sam, gdy zgadzają się czas modyfikacji (w tolerancji) i rozmiar. Szybkie — zawartość nie jest czytana.": "A file is the same when modification time (within tolerance) and size match. Fast — content is not read.",
     "Liczy się tylko rozmiar. Najszybsze, ale zmiana pliku bez zmiany rozmiaru zostanie przeoczona.": "Only size counts. Fastest, but a change that keeps the size will be missed.",
-    "Porównywana jest zawartość pliku (suma BLAKE3). Najdokładniejsze, ale wolne: każdy plik jest czytany w całości. W chmurze używane są sumy kontrolne dostawcy, jeśli je podaje.": "File content is compared (BLAKE3 checksum). Most accurate but slow: every file is read in full. In the cloud the provider's checksums are used when available.",
+    "Porównywana jest zawartość pliku (suma BLAKE3). Najdokładniejsze, ale wolne: każdy plik jest czytany w całości. Dla kont zdalnych używane są sumy kontrolne serwera, jeśli je podaje.": "File content is compared (BLAKE3 checksum). Most accurate but slow: every file is read in full. In the cloud the provider's checksums are used when available.",
     "Tolerancja czasu (sekundy, 0–86400)": "Time tolerance (seconds, 0–86400)", "Ignoruj przesunięcie czasu (godziny, 0–23)": "Ignore time shift (hours, 0–23)",
     "Tolerancja: pliki z czasem różniącym się o mniej niż tyle sekund są takie same (systemy FAT zaokrąglają czas do 2 s). Przesunięcie: pliki różniące się o całkowitą liczbę godzin do podanej wartości (zmiana czasu letni/zimowy, strefa czasowa) są traktowane jako takie same. 0 = wyłączone.": "Tolerance: files whose times differ by less than this many seconds are the same (FAT rounds time to 2 s). Shift: files differing by a whole number of hours up to the given value (daylight saving, time zone) are treated as the same. 0 = off.",
     "Pomijaj pliki młodsze niż (dni)": "Skip files newer than (days)", "Pomijaj pliki starsze niż (dni)": "Skip files older than (days)",
@@ -255,7 +255,7 @@
     [/^(\d+) wersji\)?$/, "$1 versions"], [/^\((\d+) wersji\)$/, "($1 versions)"],
     [/^Wersja pliku „(.+)” zostanie usunięta bez możliwości przywrócenia\.$/, "The version of “$1” will be deleted permanently.", true],
     [/^Zadanie „(.+)” zostanie usunięte\. Pliki na dyskach nie zostaną ruszone\.$/, "Job “$1” will be deleted. Files on disks are not touched.", true],
-    [/^Konto „(.+)” zostanie usunięte z aplikacji \(dane w chmurze zostają\)\.$/, "Account “$1” will be removed from the app (cloud data stays).", true],
+    [/^Konto „(.+)” zostanie usunięte z aplikacji \(dane na serwerze zostają\)\.$/, "Account “$1” will be removed from the app (data on the server stays).", true],
     [/^Cały kosz zadania „(.+)” \(obie strony\) zostanie usunięty trwale\.$/, "The whole trash of job “$1” (both sides) will be deleted permanently.", true],
     [/^Kosz tego zadania jest włączony \((\d+) dni.*\)\.$/, "This job's trash is on ($1 days)."],
     [/^Kosz tego zadania jest wyłączony.*$/, "This job's trash is off — nothing new is stored. Turn it on in the job editor (step 5)."],
@@ -314,10 +314,39 @@
   // teksty bezpośrednio w elemencie (potomne <span class="kind"> itp. nadal są tłumaczone).
   const PROT_IN = "[data-nt], .card .name, .loc .t span, .treerow span, #repBody summary, " +
     "#hist td:nth-child(2), #hist td:nth-child(4), #pending td:nth-child(2), #pending td[colspan='3'], #trashTbl td:first-child > b, " +
-    "#remotes .grow > b, #summary li b, .cur, #histJob option:not([value='']), #trashJob option:not([value='']), select[data-remote] option:not([value=''])";
+    "#remotes .grow b, #summary li b, .cur, #histJob option:not([value='']), #trashJob option:not([value='']), select[data-remote] option:not([value=''])";
   const PROT_OWN = "#repBody .scroll div, #repBody details div";
   // Frazy (PHRASES) tylko w kontenerach z komunikatami aplikacji, nigdy w ogólnym tekście.
   const MSG = ".msg.warn, .meta, .stats, .pill, #stepName, #summary li, #pending td.muted, #hist td.muted, #repBody > p, #trashTbl .muted, .tile .v";
+  // --- v0.8 (zespół F): konta, import, pusty stan, podpowiedzi „co zrobić” ---
+  Object.assign(EXACT, {
+    "Brak wpisów pasujących do wyszukiwania.": "No entries match your search.", "Historia jest pusta — wpisy pojawią się po pierwszej synchronizacji.": "History is empty — entries will appear after the first synchronization.",
+    "Kosz jest pusty. Pliki usunięte lub nadpisane przez synchronizację pojawią się tu i będzie można je przywrócić.": "The trash is empty. Files deleted or overwritten by synchronization will appear here and can be restored.",
+    "Nie masz jeszcze zadań. Utwórz zadanie w zakładce „Zadania”.": "You have no jobs yet. Create a job in the “Jobs” tab.",
+    "Konta": "Accounts", "Zmniejsz skalę": "Decrease scale", "Zwiększ skalę": "Increase scale", "Wczytywanie zadań…": "Loading jobs…", "wykonaj": "run", "Importuj z rclone.conf…": "Import from rclone.conf…",
+    "Dodane konto (FTP, FTPS, SFTP, WebDAV lub S3) możesz wybrać jako lokalizację zadania, np.": "An added account (FTP, FTPS, SFTP, WebDAV or S3) can be chosen as a job location, e.g.",
+    "Plik zawiera zadania i reguły. Hasła kont nie są eksportowane.": "The file contains jobs and rules. Account passwords are not exported.",
+    ") albo konto dodane w zakładce „Konta”.": ") or an account added in the “Accounts” tab.",
+    "Konto…": "Account…",
+    "Porównuje BLAKE3 źródła i zapisanego pliku (foldery lokalne i sieciowe). Wolniej, ale wykrywa błędy zapisu. Dla kont zdalnych porównywane są sumy MD5/SHA-1/SHA-256, gdy serwer je podaje.": "Compares BLAKE3 of the source and the written file (local and network folders). Slower, but detects write errors. For remote accounts, MD5/SHA-1/SHA-256 checksums are compared when the server provides them.",
+    "Edytuj": "Edit", "Edycja konta": "Edit account", "Nowe konto": "New account", "Zapisz zmiany": "Save changes", "Wpisz hasło ponownie": "Re-enter the password",
+    "Zostaw puste, aby nie zmieniać": "Leave empty to keep unchanged", "Konto zapisane": "Account saved", "Zapisuję…": "Saving…",
+    "Nie masz jeszcze kont": "No accounts yet",
+    "Dodaj serwer FTP, SFTP, WebDAV lub S3, aby synchronizować z nim foldery. Wybierz rodzaj konta poniżej.": "Add an FTP, SFTP, WebDAV or S3 server to synchronize folders with it. Choose the account type below.",
+    "Dodaj konto zdalne": "Add a remote account",
+    "Zadanie łączy dwie lokalizacje: folder, dysk sieciowy lub konto zdalne. Wybierz gotowy szablon albo zacznij od zera.": "A job connects two locations: a folder, a network drive or a remote account. Pick a ready-made template or start from scratch.",
+    "Co zrobić: sprawdź, czy obie lokalizacje są dostępne, i uruchom zadanie ponownie. Szczegóły znajdziesz w zakładce „Aktywność”.": "What to do: check that both locations are available and run the job again. Details are in the “Activity” tab.",
+    "Import kont": "Account import", "Zaimportować konta?": "Import accounts?", "Importuj": "Import", "Nie teraz": "Not now",
+    "Wykryto konta ze starej wersji (rclone.conf). Zaimportować FTP/SFTP/WebDAV/S3? Konta Google Drive/OneDrive/Dropbox nie są już obsługiwane.": "Accounts from an older version were found (rclone.conf). Import FTP/SFTP/WebDAV/S3 accounts? Google Drive/OneDrive/Dropbox accounts are no longer supported.",
+    "Te konta wymagają ponownego wpisania hasła (użyj przycisku „Edytuj”):": "These accounts need their password entered again (use the “Edit” button):",
+    "Stary plik został usunięty.": "The old file was removed.",
+  });
+  RULES.push(
+    [/^(\d+) pozycji wymaga uwagi$/, "$1 items need attention"],
+    [/^Utworzone konta: (\d+)$/, "Accounts created: $1"], [/^Pominięte: (\d+)$/, "Skipped: $1"],
+    [/^Nie udało się zaimportować kont: (.*)$/s, "Could not import accounts: $1", true],
+    [/^\\\\serwer\\udział lub nas:$/, "\\\\server\\share or nas:", true],
+  );
   const protectedEl = (el) => !!el && (!!el.closest(PROT_IN) || el.matches(PROT_OWN));
 
   // Reguły zaczynające się stałym słowem trafiają do kubełka wg pierwszej litery (zamiast ~65 regexów na każdy tekst).
@@ -356,15 +385,15 @@
   };
   const fixAttrs = (el) => {
     if (protectedEl(el)) return;
-    for (const a of ["placeholder", "title"]) { const o = el.getAttribute(a); if (o) { const v = tr(o, false); if (v !== o) el.setAttribute(a, v); } }
+    for (const a of ["placeholder", "title", "aria-label"]) { const o = el.getAttribute(a); if (o) { const v = tr(o, false); if (v !== o) el.setAttribute(a, v); } }
   };
   const walk = (root) => {
     if (root.nodeType === 3) { fixText(root); return; }
     const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes = []; for (let n = w.nextNode(); n; n = w.nextNode()) nodes.push(n);
     for (const n of nodes) fixText(n);
-    if (root.matches && root.matches("[placeholder],[title]")) fixAttrs(root);
-    if (root.querySelectorAll) for (const el of root.querySelectorAll("[placeholder],[title]")) fixAttrs(el);
+    if (root.matches && root.matches("[placeholder],[title],[aria-label]")) fixAttrs(root);
+    if (root.querySelectorAll) for (const el of root.querySelectorAll("[placeholder],[title],[aria-label]")) fixAttrs(el);
   };
   window.i18nTr = (str) => tr(String(str), false);   // dla wyszukiwarki: dopasowanie do widocznego (przetłumaczonego) tekstu
   const start = () => {
@@ -377,7 +406,7 @@
       }
       obs.takeRecords();   // własne zmiany nie wywołują kolejnych przebiegów
     });
-    obs.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title"] });
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title", "aria-label"] });
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
   document.title = "Syncron";

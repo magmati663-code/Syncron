@@ -50,7 +50,7 @@ const PL_DIA = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
 
   // --- konta
   await page.click("nav button[data-tab=accounts]"); await page.waitForTimeout(400);
-  const acc = await txt("#remotes .grow > b");
+  const acc = await txt("#remotes .grow b");
   R.check("EN: nazwy kont chmurowych bez zmian", same(acc, ["Zadanie:", "Plik:"]), JSON.stringify(acc));
   const delBtns = await txt("#remotes button.danger");
   R.check("EN: przyciski kont przetłumaczone (Delete)", delBtns.every((x) => x === "Delete"), JSON.stringify(delBtns));
@@ -67,7 +67,7 @@ const PL_DIA = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
   for (const tab of ["jobs", "activity", "trash", "accounts", "settings"]) {
     await page.click(`nav button[data-tab=${tab}]`); await page.waitForTimeout(300);
     dia[tab] = await page.evaluate(() => {
-      const DATA = "[data-nt], textarea, input, .card .name, .loc .t span, .treerow span, #hist td:nth-child(2), #hist td:nth-child(4), #pending td:nth-child(2), #pending td[colspan='3'], #trashTbl td:first-child, #remotes .grow > b, option:not([value='']), .cur, .tag, .msg";
+      const DATA = "[data-nt], textarea, input, .card .name, .loc .t span, .treerow span, #hist td:nth-child(2), #hist td:nth-child(4), #pending td:nth-child(2), #pending td[colspan='3'], #trashTbl td:first-child, #remotes .grow b, option:not([value='']), .cur, .tag, .msg";
       const out = [];
       const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       for (let n = w.nextNode(); n; n = w.nextNode()) {

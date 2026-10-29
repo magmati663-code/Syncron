@@ -13,7 +13,7 @@
     <button data-tab="jobs" class="active" aria-current="page"><span data-i="sync"></span><span class="l">Zadania</span></button>
     <button data-tab="activity"><span data-i="activity"></span><span class="l">Aktywność</span><span class="badge" id="attBadge" hidden></span></button>
     <button data-tab="trash"><span data-i="trash"></span><span class="l">Kosz i wersje</span></button>
-    <button data-tab="accounts"><span data-i="cloud"></span><span class="l">Konta chmurowe</span></button>
+    <button data-tab="accounts"><span data-i="network"></span><span class="l">Konta</span></button>
     <button data-tab="settings"><span data-i="sliders"></span><span class="l">Ustawienia</span></button>
   </nav>
   <div class="grow"></div>
@@ -56,12 +56,13 @@
   </section>
 
   <section id="tab-accounts" class="tab">
-    <header class="page"><div><h1>Konta zdalne</h1><p class="sub">Po połączeniu konto pojawi się jako lokalizacja <code>nazwa:</code> (np. <code>serwer:Dokumenty</code>). FTP, FTPS, SFTP, WebDAV (Nextcloud, Bitrix24) i S3.</p></div></header>
-    <div class="box" id="remotes"></div>
+    <header class="page"><div><h1>Konta</h1><p class="sub">Dodane konto (FTP, FTPS, SFTP, WebDAV lub S3) możesz wybrać jako lokalizację zadania, np. <code>serwer:Dokumenty</code>.</p></div><div class="pick"><button type="button" id="rcImport"><span data-i="download"></span>Importuj z rclone.conf…</button></div></header>
+    <div class="box" id="remotes" aria-busy="true"><div class="skel"><div class="sk-card"><i class="sk w40"></i><i class="sk w70"></i></div></div></div>
     <p class="muted" id="smbHint">Udziały SMB/CIFS (dysk sieciowy Windows, Samba, NAS) nie wymagają konta: wpisz ścieżkę sieciową, np. <code>\\serwer\udział</code>, albo zamontowany folder, w kreatorze zadania.</p>
     <h3>Dodaj konto</h3>
     <div class="providers" id="providers"></div>
     <div class="box form" id="rForm" hidden style="margin-top:14px">
+      <b id="rFormTitle">Nowe konto</b>
       <label>Nazwa konta (np. serwer)<input id="rName" autocomplete="off"></label>
       <div id="rFields" class="form"></div>
       <div class="pick"><button id="rAdd" class="primary">Połącz konto</button><span id="rMsg" class="muted"></span></div>
@@ -112,7 +113,7 @@
         <p class="muted">Diagnostyka zawiera wersję, system, stan zadań (bez ścieżek plików) i ostatnie wpisy dziennika — wklej ją w zgłoszeniu problemu.</p></div>
       <div class="form" style="gap:8px"><b>Kopia konfiguracji</b>
         <div class="pick"><button type="button" id="cfgExport"><span data-i="download"></span>Eksportuj zadania</button><button type="button" id="cfgImport">Importuj zadania</button></div>
-        <p class="muted">Plik zawiera zadania i reguły. Hasła i tokeny kont chmurowych nie są eksportowane.</p></div>
+        <p class="muted">Plik zawiera zadania i reguły. Hasła kont nie są eksportowane.</p></div>
       <p class="muted">Zamknięcie okna chowa aplikację do zasobnika — synchronizacja działa dalej. Zakończ z menu ikony w zasobniku.</p>
       <div id="vssBox" hidden>
         <b>VSS (Windows): pliki zablokowane przez inne programy</b>
@@ -120,7 +121,6 @@
         <div class="pick"><button type="button" id="vssElevate" class="primary" hidden>Uruchom ponownie jako administrator</button></div>
         <label class="sw" id="vssAutoRow" hidden><input type="checkbox" id="vssAuto"><span>Uruchamiaj przy logowaniu jako administrator<small>Tworzy zadanie harmonogramu Windows z najwyższymi uprawnieniami (zastępuje zwykły autostart).</small></span></label>
       </div>
-      <p>Silnik chmur: <code id="rcv">…</code></p>
     </div>
   </section>
 </main>
@@ -145,11 +145,11 @@
             <div class="hint" data-hint="right"></div></div>
         </div>
         <p class="msg warn" id="nestWarn" role="alert" hidden>Uwaga: jedna lokalizacja leży wewnątrz drugiej. Synchronizacja kopiowałaby folder sam do siebie — wybierz foldery, które się nie zawierają.</p>
-        <p class="muted">Lokalizacją może być folder, dysk sieciowy (<code>\\serwer\udział</code>) albo konto chmurowe dodane w zakładce „Konta chmurowe”.</p>
+        <p class="muted">Lokalizacją może być folder, dysk sieciowy (<code>\\serwer\udział</code>) albo konto dodane w zakładce „Konta”.</p>
       </div>
       <!-- 2 -->
       <div class="step" data-step="1">
-        <div class="choice">
+        <div class="choice c2">
           <label class="opt"><input type="radio" name="mode" value="TwoWay"><b>⇄ Dwustronna</b><span>Zmiany z obu stron trafiają na drugą</span></label>
           <label class="opt"><input type="radio" name="mode" value="LeftToRight"><b>→ Lewa do prawej</b><span>Prawa strona jest kopią lewej</span></label>
           <label class="opt"><input type="radio" name="mode" value="RightToLeft"><b>← Prawa do lewej</b><span>Lewa strona jest kopią prawej</span></label>
@@ -238,7 +238,7 @@
           <label>Styl wersji w koszu
             <select name="versioning"><option value="Folders">Foldery z datą (każda wersja osobno)</option><option value="Replace">Zastępuj (tylko najnowsza kopia pliku)</option></select></label>
         </div>
-        <label class="sw"><input type="checkbox" name="verify"><span>Sprawdzaj sumę kontrolną po kopiowaniu<small>Porównuje BLAKE3 źródła i zapisanego pliku (foldery lokalne i sieciowe). Wolniej, ale wykrywa błędy zapisu. Chmury weryfikuje rclone.</small></span></label>
+        <label class="sw"><input type="checkbox" name="verify"><span>Sprawdzaj sumę kontrolną po kopiowaniu<small>Porównuje BLAKE3 źródła i zapisanego pliku (foldery lokalne i sieciowe). Wolniej, ale wykrywa błędy zapisu. Dla kont zdalnych porównywane są sumy MD5/SHA-1/SHA-256, gdy serwer je podaje.</small></span></label>
         <label class="sw"><input type="checkbox" name="detect_moves"><span>Wykrywaj przeniesienia i zmiany nazwy<small>Przeniesiony plik jest przenoszony po drugiej stronie zamiast kopiowany i usuwany. Wyłącz, jeśli wolisz prostą kopię.</small></span></label>
         <label class="sw"><input type="checkbox" name="preserve_permissions"><span>Zachowuj uprawnienia plików<small>Linux i macOS: kopiuje bity uprawnień (chmod). W Windows bez efektu.</small></span></label>
         <label class="sw" id="vssRow" hidden><input type="checkbox" name="use_vss"><span>Czytaj pliki zablokowane przez inne programy z migawki VSS<small>Windows: wymaga uruchomienia jako administrator (Ustawienia → VSS).</small></span></label>

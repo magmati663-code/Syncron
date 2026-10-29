@@ -111,11 +111,11 @@ const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.
   }
   // list_remotes odrzucone
   {
-    const { browser, page } = await open([["list_remotes", "rclone: nie znaleziono pliku wykonywalnego"]]);
+    const { browser, page } = await open([["list_remotes", "magazyn kont: brak dostępu do pliku"]]);
     await page.click("nav button[data-tab=accounts]"); await page.waitForTimeout(300);
     const t = await page.locator("#remotes").innerText();
     const toasts = (await toastText(page)).join("|");
-    R.check("list_remotes odrzucone (np. brak rclone) -> błąd widoczny, a nie 'Brak połączonych kont'", !/Brak połączonych kont/.test(t) || /rclone/.test(toasts), `lista="${t.trim()}", toasty="${toasts}"`);
+    R.check("list_remotes odrzucone (np. magazyn kont niedostępny) -> błąd widoczny, a nie 'Brak połączonych kont'", !/Brak połączonych kont/.test(t) || /magazyn kont/.test(toasts), `lista="${t.trim()}", toasty="${toasts}"`);
     await browser.close();
   }
   // add_remote odrzucone
@@ -133,7 +133,7 @@ const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.
     const name = await page.inputValue("#rName");
     await page.click("#rAdd"); await page.waitForTimeout(250);
     const c = (await page.evaluate(() => window.__stub.calls)).filter((x) => x.cmd === "add_remote");
-    R.check(`dodanie konta pod już istniejącą nazwą ("${name}") jest zablokowane/ostrzeżone (inaczej rclone config create nadpisze konto)`, c.length === 0 || (await page.locator("#confirm[open]").count()) === 1, `add_remote wywołane z name="${c[0] && c[0].args.name}" mimo istniejącego konta`);
+    R.check(`dodanie konta pod już istniejącą nazwą ("${name}") jest zablokowane/ostrzeżone (inaczej konto zostałoby nadpisane)`, c.length === 0 || (await page.locator("#confirm[open]").count()) === 1, `add_remote wywołane z name="${c[0] && c[0].args.name}" mimo istniejącego konta`);
     await browser.close();
   }
   // add_remote: hasło z białymi znakami przycinane
@@ -231,9 +231,9 @@ const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.
   }
   // brakująca komenda (np. niezgodna wersja) -> zachowanie
   {
-    const { browser, page, errors } = await open([["vss_status", "Command vss_status not found"], ["rclone_version", "rclone: nie znaleziono"]]);
+    const { browser, page, errors } = await open([["vss_status", "Command vss_status not found"], ["rclone_import_offer", "Command rclone_import_offer not found"]]);
     await page.click("nav button[data-tab=settings]"); await page.waitForTimeout(200);
-    R.check("rclone_version odrzucone -> czytelny tekst w ustawieniach", /niedostępny/.test(await page.textContent("#rcv")));
+    R.check("rclone_import_offer odrzucone -> brak okna i brak wiersza silnika w ustawieniach", (await page.locator("#confirm[open]").count()) === 0 && (await page.locator("#rcv").count()) === 0);
     R.check("vss_status odrzucone -> brak błędów JS", errors.length === 0, errors.join("|"));
     await browser.close();
   }
