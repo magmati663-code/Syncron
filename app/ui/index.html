@@ -37,6 +37,14 @@
     <header class="page"><div><h1>Aktywność</h1><p class="sub">Rzeczy wymagające uwagi i historia operacji.</p></div></header>
     <h3 style="margin-top:0">Wymaga uwagi</h3>
     <div id="pending" class="box"></div>
+    <!-- v08 E: podsumowanie i eksport raportu (reports.js) -->
+    <h3>Podsumowanie</h3>
+    <div class="toolbar" id="repBar">
+      <select id="repRange" aria-label="Zakres podsumowania"><option value="1">Ostatnie 24 godziny</option><option value="7">Ostatnie 7 dni</option><option value="30" selected>Ostatnie 30 dni</option><option value="90">Ostatnie 90 dni</option><option value="0">Cała historia</option></select>
+      <button id="repExport" type="button"><span data-i="download"></span>Eksportuj raport…</button>
+    </div>
+    <div class="rep-cards" id="repCards" aria-live="polite"></div>
+    <p class="muted" id="repTop" hidden></p>
     <h3>Historia operacji</h3>
     <div class="toolbar">
       <select id="histJob"></select>
@@ -261,6 +269,26 @@
           <label>Limit czasu poleceń (sekundy, 1–86400)<input name="run_timeout_secs" type="number" min="1" max="86400" step="1"></label>
           <p class="muted">Po przekroczeniu limitu polecenie jest przerywane. Po synchronizacji dostępne są zmienne środowiskowe SYNCRON_JOB, SYNCRON_COPIED, SYNCRON_DELETED, SYNCRON_ERRORS, SYNCRON_LEFT, SYNCRON_RIGHT. Importowane zadania nigdy nie zawierają poleceń.</p>
         </div>
+        <!-- v08 E: powiadomienia i webhook (reports.js) -->
+        <div class="box v08" id="notifyBox">
+          <b>Powiadomienia i webhook</b>
+          <div class="g2">
+            <label>Powiadomienia systemowe
+              <select name="notify_on"><option value="Errors">Tylko błędy i konflikty</option><option value="Always">Po każdym przebiegu</option><option value="Never">Nigdy</option></select></label>
+            <label>Wysyłaj webhook
+              <select name="webhook_on"><option value="Never">Nigdy</option><option value="Errors">Tylko błędy i konflikty</option><option value="Always">Po każdym przebiegu</option></select></label>
+          </div>
+          <div id="whFields">
+            <label>Adres webhooka (http lub https)<input name="webhook_url" placeholder="Wklej adres (zaczyna się od http lub https)" spellcheck="false" autocomplete="off"></label>
+            <div class="g2">
+              <label>Format wiadomości
+                <select name="webhook_format"><option value="Json">JSON (ogólny)</option><option value="Slack">Slack</option><option value="Discord">Discord</option><option value="Ntfy">ntfy (tekst)</option></select></label>
+              <label class="sw"><input type="checkbox" name="webhook_allow_private"><span>Zezwól na adresy lokalne<small>Np. serwer ntfy w sieci domowej. Domyślnie adresy lokalne i prywatne są blokowane.</small></span></label>
+            </div>
+            <div class="pick"><button type="button" id="whTest">Wyślij testowy</button><span class="muted" id="whMsg" role="status" aria-live="polite"></span></div>
+            <p class="msg warn">Prywatność: adres webhooka bywa tajny (często zawiera token). Jest zapisany w konfiguracji zadania i trafia do pliku eksportu, ale nigdy nie jest wczytywany przy imporcie ani wypisywany w dzienniku. Do usługi wysyłana jest nazwa zadania, liczby plików, lokalizacje i komunikaty błędów (mogą zawierać nazwy plików).</p>
+          </div>
+        </div>
         <label class="sw"><input type="checkbox" name="enabled"><span>Zadanie włączone</span></label>
         <div class="summary" id="summary"></div>
       </div>
@@ -277,6 +305,30 @@
   <div class="dh"><h2 id="repTitle"></h2></div>
   <div class="db" id="repBody"></div>
   <div class="df"><span></span><div class="pick"><button id="repRun" class="primary" hidden>Wykonaj zaznaczone</button><button id="repClose" class="primary">Zamknij</button></div></div>
+</dialog>
+
+<dialog id="exportDlg" style="width:min(520px,94vw)">
+  <div class="dh"><h2>Eksportuj raport</h2></div>
+  <div class="db form">
+    <div class="g2">
+      <label>Format
+        <select id="expFormat"><option value="csv">CSV (Excel, separator „;”)</option><option value="json">JSON</option><option value="html">HTML (samodzielny plik)</option></select></label>
+      <label>Zakres dat
+        <select id="expRange"><option value="1">Ostatnie 24 godziny</option><option value="7">Ostatnie 7 dni</option><option value="30" selected>Ostatnie 30 dni</option><option value="90">Ostatnie 90 dni</option><option value="0">Cała historia</option><option value="c">Własny zakres…</option></select></label>
+    </div>
+    <div class="g2" id="expDates" hidden>
+      <label>Od<input type="date" id="expFrom"></label>
+      <label>Do<input type="date" id="expTo"></label>
+    </div>
+    <div class="g2">
+      <label>Zadanie<select id="expJob"></select></label>
+      <label>Rodzaj operacji
+        <select id="expKind"><option value="">Wszystkie</option><option value="kopiowanie">Kopiowanie</option><option value="usunięcie">Usunięcia</option><option value="przeniesienie">Przeniesienia</option><option value="konflikt">Konflikty</option><option value="błąd">Błędy</option></select></label>
+    </div>
+    <p class="muted">Raport CSV chroni przed wstrzyknięciem formuł (pola zaczynające się od „=”, „+”, „-”, „@” dostają apostrof). Raport HTML nie ładuje żadnych zewnętrznych zasobów.</p>
+    <p class="err" id="expErr" role="status" aria-live="polite"></p>
+  </div>
+  <div class="df"><button type="button" id="expCancel" class="ghost">Anuluj</button><button type="button" id="expGo" class="primary">Zapisz raport…</button></div>
 </dialog>
 
 <dialog id="ffsDlg">
@@ -310,5 +362,6 @@
 <script src="i18n.js"></script>
 <script src="scale.js"></script>
 <script src="app.js"></script>
+<script src="reports.js"></script>
 </body>
 </html>

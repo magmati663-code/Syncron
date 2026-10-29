@@ -17,6 +17,8 @@ POLECENIA:
   list                          pokaż zadania
   run <nazwa|id> [--dry-run] [--force]
                                 uruchom zadanie raz (--dry-run: tylko symulacja, --force: pomiń zabezpieczenia)
+  report [--job NAZWA] [--kind RODZAJ] [--since 7d|RRRR-MM-DD] [--until 1d|RRRR-MM-DD] [--format csv|json|html] [--out PLIK]
+                                raport z historii (bez --out: na standardowe wyjście; rodzaje: copy, delete, move, conflict, error, warning)
   daemon                        działaj w tle i uruchamiaj zadania według harmonogramów (Ctrl+C: koniec)
   export <plik.json>            zapisz zadania do pliku
   import <plik.json>            wczytaj zadania z pliku (polecenia przed/po z pliku są usuwane)
@@ -389,8 +391,9 @@ fn check_opts(rest: &[String], allowed: &[&str]) -> Result<(), String> {
     }
 }
 
-const COMMANDS: [&str; 9] = [
+const COMMANDS: [&str; 10] = [
     "list",
+    "report",
     "run",
     "daemon",
     "export",
@@ -522,6 +525,67 @@ fn real_main() -> Result<ExitCode, String> {
                 return Ok(ExitCode::from(2));
             }
         }
+        "report" => {
+            const OPTS: [&str; 6] = ["--job", "--kind", "--since", "--until", "--format", "--out"];
+            let mut vals: std::collections::HashMap<&str, String> = Default::default();
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                let key = OPTS
+                    .iter()
+                    .find(|o| **o == a.as_str())
+                    .ok_or_else(|| format!("nieznana opcja „{}” (syncron help)", clean(a)))?;
+                let v = it
+                    .next()
+                    .ok_or_else(|| format!("opcja {key} wymaga wartości"))?;
+                vals.insert(key, v.clone());
+            }
+            let now = chrono::Local::now().timestamp();
+            let jobs = runner.load_jobs_checked().unwrap_or_default();
+            let mut filter = syncron_core::report::Filter::default();
+            if let Some(q) = vals.get("--job") {
+                // zadanie mogło zostać usunięte, a jego historia nadal istnieć: akceptujemy też surowy identyfikator
+                filter.job = Some(match find_job(&jobs, q) {
+                    Ok(j) => j.id.clone(),
+                    Err(e) if jobs.iter().any(|j| j.id == *q) || e.contains("wielu") => {
+                        return Err(e)
+                    }
+                    Err(_) => q.clone(),
+                });
+            }
+            filter.kind = vals.get("--kind").cloned();
+            if let Some(v) = vals.get("--since") {
+                filter.since = Some(syncron_core::report::parse_since(v, now)?);
+            }
+            if let Some(v) = vals.get("--until") {
+                let t = syncron_core::report::parse_since(v, now)?;
+                // data bez godziny oznacza koniec tego dnia
+                filter.until = Some(if v.contains('-') { t + 86_399 } else { t });
+            }
+            let format = syncron_core::report::Format::parse(
+                vals.get("--format").map(String::as_str).unwrap_or("csv"),
+            )?;
+            let names: std::collections::HashMap<String, String> = jobs
+                .iter()
+                .map(|j| (j.id.clone(), j.name.clone()))
+                .collect();
+            match vals.get("--out") {
+                Some(out) => {
+                    let n =
+                        syncron_core::report::export(&dir, format, &filter, &names, Path::new(out))
+                            .map_err(|e| e.to_string())?;
+                    println!("Zapisano raport: {n} wpisów → {}", clean(out));
+                }
+                None => {
+                    let rows =
+                        syncron_core::report::query(&dir, &filter, syncron_core::report::MAX_ROWS)
+                            .map_err(|e| e.to_string())?;
+                    print!(
+                        "{}",
+                        syncron_core::report::render(format, &rows, &filter, &names)
+                    );
+                }
+            }
+        }
         "daemon" => {
             check_opts(rest, &[])?;
             let _ = log::set_logger(&StdoutLogger);
@@ -575,15 +639,16 @@ fn real_main() -> Result<ExitCode, String> {
             let mut incoming: Vec<Job> = serde_json::from_str(&read_json_file(f)?)
                 .map_err(|e| format!("to nie jest plik konfiguracji Syncron: {e}"))?;
             // polecenia przed/po to wykonanie dowolnego kodu: z importu nigdy ich nie przejmujemy
-            let had_hooks = incoming
-                .iter()
-                .any(|j| j.run_before.is_some() || j.run_after.is_some());
+            let had_hooks = incoming.iter().any(|j| {
+                j.run_before.is_some() || j.run_after.is_some() || j.webhook_url.is_some()
+            });
             for j in &mut incoming {
                 j.run_before = None;
                 j.run_after = None;
+                j.webhook_url = None;
             }
             if had_hooks {
-                eprintln!("Uwaga: usunięto polecenia przed/po z importowanych zadań (ustaw je ręcznie w aplikacji).");
+                eprintln!("Uwaga: usunięto polecenia przed/po i adresy webhooków z importowanych zadań (ustaw je ręcznie w aplikacji).");
             }
             for (n, j) in incoming.iter().enumerate() {
                 for (what, v) in [

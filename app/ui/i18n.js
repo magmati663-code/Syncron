@@ -285,6 +285,43 @@
     [/^(.+): podaj liczbę MB od 0 do ([\d\s\u00a0]+) \(puste lub 0 = bez limitu\)\.$/, (l, n) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size"}[l] || l) + ": enter a size in MB from 0 to " + n.replace(/[\s\u00a0]+/g, ",") + " (empty or 0 = no limit).", true],
   ];
 
+  // ---- v0.8, zespół E: raporty, powiadomienia, webhook (nie nadpisuje istniejących wpisów) ----
+  const EXACT_E = {
+    "Podsumowanie": "Summary", "Ostatnie 24 godziny": "Last 24 hours", "Ostatnie 7 dni": "Last 7 days", "Ostatnie 30 dni": "Last 30 days", "Ostatnie 90 dni": "Last 90 days",
+    "Cała historia": "All history", "Eksportuj raport…": "Export report…", "Eksportuj raport": "Export report", "Zakres podsumowania": "Summary range",
+    "Przebiegi": "Runs", "Skopiowane": "Copied", "Usunięte": "Deleted", "Konflikty": "Conflicts", "Błędy": "Errors", "Najczęstsze błędy:": "Most common errors:",
+    "Powiadomienia i webhook": "Notifications and webhook", "Powiadomienia systemowe": "System notifications",
+    "Tylko błędy i konflikty": "Errors and conflicts only", "Po każdym przebiegu": "After every run", "Nigdy": "Never", "Wysyłaj webhook": "Send webhook",
+    "Adres webhooka (http lub https)": "Webhook address (http or https)", "Wklej adres (zaczyna się od http lub https)": "Paste the address (starts with http or https)",
+    "Format wiadomości": "Message format", "JSON (ogólny)": "JSON (generic)", "ntfy (tekst)": "ntfy (text)",
+    "Zezwól na adresy lokalne": "Allow local addresses",
+    "Np. serwer ntfy w sieci domowej. Domyślnie adresy lokalne i prywatne są blokowane.": "E.g. an ntfy server on your home network. Local and private addresses are blocked by default.",
+    "Wyślij testowy": "Send test",
+    "Prywatność: adres webhooka bywa tajny (często zawiera token). Jest zapisany w konfiguracji zadania i trafia do pliku eksportu, ale nigdy nie jest wczytywany przy imporcie ani wypisywany w dzienniku. Do usługi wysyłana jest nazwa zadania, liczby plików, lokalizacje i komunikaty błędów (mogą zawierać nazwy plików).":
+      "Privacy: the webhook address is often secret (it usually contains a token). It is stored in the job configuration and included in exported files, but it is never read on import or written to the log. The service receives the job name, file counts, locations and error messages (which may contain file names).",
+    "Format": "Format", "Zakres dat": "Date range", "CSV (Excel, separator „;”)": "CSV (Excel, “;” separator)", "HTML (samodzielny plik)": "HTML (standalone file)",
+    "Własny zakres…": "Custom range…", "Od": "From", "Do": "To", "Rodzaj operacji": "Operation type", "Wszystkie": "All", "Kopiowanie": "Copying", "Usunięcia": "Deletions",
+    "Przeniesienia": "Moves", "Raport CSV chroni przed wstrzyknięciem formuł (pola zaczynające się od „=”, „+”, „-”, „@” dostają apostrof). Raport HTML nie ładuje żadnych zewnętrznych zasobów.":
+      "The CSV report protects against formula injection (fields starting with “=”, “+”, “-”, “@” get an apostrophe). The HTML report loads no external resources.",
+    "Zapisz raport…": "Save report…",
+    "Podaj datę początkową lub końcową albo wybierz gotowy zakres.": "Enter a start or end date, or pick a preset range.", "Niepoprawna data.": "Invalid date.",
+    "Data początkowa nie może być późniejsza niż końcowa.": "The start date cannot be later than the end date.",
+    "Nie udało się wczytać podsumowania.": "Could not load the summary.", "Nie udało się zapisać raportu.": "Could not save the report.",
+    "Adres webhooka musi zaczynać się od http:// lub https://, zawierać nazwę hosta i nie może mieć loginu ani hasła.": "The webhook address must start with http:// or https://, contain a host name and have no user name or password.",
+    "Podaj adres webhooka albo wybierz „Nigdy” w polu „Wysyłaj webhook”.": "Enter a webhook address or choose “Never” in “Send webhook”.",
+    "Najpierw podaj adres webhooka.": "Enter the webhook address first.",
+    "Adres musi zaczynać się od http:// lub https:// i nie może mieć loginu ani hasła.": "The address must start with http:// or https:// and have no user name or password.",
+    "\\\\serwer\\udział lub nas:": "\\\\server\\share or nas:",
+    "Wysyłam…": "Sending…", "Wysłano wiadomość testową.": "Test message sent.", "Nie udało się wysłać wiadomości testowej.": "Could not send the test message.",
+  };
+  for (const [k, v] of Object.entries(EXACT_E)) if (!(k in EXACT)) EXACT[k] = v;
+  const WH_EN = { "wyłączone": "off", "tylko błędy i konflikty": "errors and conflicts only", "po każdym przebiegu": "after every run", "wyłączony": "off", "tylko przy błędach i konfliktach": "on errors and conflicts only" };
+  RULES.push(
+    [/^Zapisano raport: (\d+) wpisów$/, "Report saved: $1 entries"],
+    [/^Powiadomienia systemowe: (.+)\.$/, (m) => "System notifications: " + (WH_EN[m] || m)],
+    [/^Webhook \((.+)\): (.+)\.$/, (f, m) => `Webhook (${f}): ` + (WH_EN[m] || m) + ".", true],
+  );
+
   // Frazy do podmiany wewnątrz dłuższych tekstów (składanych w kodzie z wielu części).
   const PHRASES = [
     [/Czeka na warunki: komputer działa na baterii \(zadanie wymaga zasilania sieciowego\)/g, "Waiting for conditions: the computer is on battery (the job requires AC power)"],

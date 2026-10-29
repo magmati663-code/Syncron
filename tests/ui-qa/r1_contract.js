@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { reporter } = require("./lib");
 const R = reporter("r1_contract");
-const js = fs.readFileSync(path.join(__dirname, "../../app/ui/app.js"), "utf8");
+const js = ["app.js", "reports.js"].map((f) => fs.readFileSync(path.join(__dirname, "../../app/ui", f), "utf8")).join("\n");
 const rs = fs.readFileSync(path.join(__dirname, "../../app/src-tauri/src/main.rs"), "utf8");
 const cap = fs.readFileSync(path.join(__dirname, "../../app/src-tauri/capabilities/default.json"), "utf8");
 
