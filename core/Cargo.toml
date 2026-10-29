@@ -16,6 +16,13 @@ anyhow = "1"
 blake3 = { version = "1", default-features = false, features = ["std"] }
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh-sftp = "3"
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "io-util", "sync"] }
+quick-xml = "0.42"
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
 [dev-dependencies]
 tempfile = "3"
 unicode-normalization = "0.1"

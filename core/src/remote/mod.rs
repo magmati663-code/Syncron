@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 pub mod http;
 pub mod mem;
+pub mod s3;
+pub mod sftp;
 pub mod spec;
 
 /// Skrót zawartości podawany przez serwer (jeśli go ma): pozwala porównać pliki bez pobierania.
@@ -208,6 +210,8 @@ pub fn open(kind: &str, p: &Params, root: &str) -> RResult<Box<dyn Backend>> {
             p.get("id").unwrap_or("default"),
             &root,
         ))),
+        "s3" => Ok(Box::new(s3::S3Backend::new(p, &root)?)),
+        "sftp" => Ok(Box::new(sftp::SftpBackend::new(p, &root)?)),
         other => Err(RError::Failed(format!(
             "rodzaj konta „{other}” nie jest jeszcze obsługiwany"
         ))),
