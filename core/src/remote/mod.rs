@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+pub mod http;
 pub mod mem;
 pub mod spec;
 
