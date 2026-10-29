@@ -15,8 +15,13 @@ log = "0.4"
 anyhow = "1"
 blake3 = { version = "1", default-features = false, features = ["std"] }
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+suppaftp = { version = "12", default-features = false, features = ["rustls-ring", "deprecated"] }
+quick-xml = "0.37"
+webpki-roots = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 tempfile = "3"
 unicode-normalization = "0.1"
 filetime = "0.2"
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }

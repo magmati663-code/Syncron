@@ -13,9 +13,11 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+pub mod ftp;
 pub mod http;
 pub mod mem;
 pub mod spec;
+pub mod webdav;
 
 /// Skrót zawartości podawany przez serwer (jeśli go ma): pozwala porównać pliki bez pobierania.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +210,9 @@ pub fn open(kind: &str, p: &Params, root: &str) -> RResult<Box<dyn Backend>> {
             p.get("id").unwrap_or("default"),
             &root,
         ))),
+        "webdav" => Ok(Box::new(webdav::WebDav::new(p, &root)?)),
+        "ftp" => Ok(Box::new(ftp::FtpBackend::new("ftp", p, &root)?)),
+        "ftps" => Ok(Box::new(ftp::FtpBackend::new("ftps", p, &root)?)),
         other => Err(RError::Failed(format!(
             "rodzaj konta „{other}” nie jest jeszcze obsługiwany"
         ))),
