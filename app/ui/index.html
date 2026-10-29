@@ -76,6 +76,29 @@
           <label class="opt"><input type="radio" name="theme" value="light"><b>Jasny</b><span>Zawsze jasny</span></label>
           <label class="opt"><input type="radio" name="theme" value="dark"><b>Ciemny</b><span>Zawsze ciemny</span></label>
         </div></div>
+      <div class="apr" id="appearance" role="group" aria-labelledby="apTitle">
+        <b id="apTitle">Wygląd i skalowanie</b>
+        <div class="form" style="gap:6px"><label for="apScale">Skala interfejsu</label>
+          <div class="rng"><button type="button" class="sm" id="apScaleDn" aria-label="Zmniejsz skalę">−</button><input type="range" id="apScale" min="75" max="200" step="5" value="100"><button type="button" class="sm" id="apScaleUp" aria-label="Zwiększ skalę">+</button><output id="apScaleV" for="apScale">100%</output></div></div>
+        <div class="form" style="gap:6px"><label for="apFont">Rozmiar tekstu</label>
+          <div class="rng"><input type="range" id="apFont" min="85" max="150" step="5" value="100"><output id="apFontV" for="apFont">100%</output></div></div>
+        <div class="form" style="gap:6px"><b>Gęstość</b>
+          <div class="choice" id="apDensity">
+            <label class="opt"><input type="radio" name="density" value="compact"><b>Zwarta</b><span>Więcej treści na ekranie</span></label>
+            <label class="opt"><input type="radio" name="density" value="normal"><b>Normalna</b><span>Domyślny odstęp</span></label>
+            <label class="opt"><input type="radio" name="density" value="comfortable"><b>Wygodna</b><span>Większe cele dotykowe</span></label>
+          </div></div>
+        <div class="form" style="gap:6px"><b>Pasek boczny</b>
+          <div class="choice" id="apSidebar">
+            <label class="opt"><input type="radio" name="sidebar" value="auto"><b>Automatyczny</b><span>Zwija się w wąskim oknie</span></label>
+            <label class="opt"><input type="radio" name="sidebar" value="expanded"><b>Rozwinięty</b><span>Zawsze z nazwami</span></label>
+            <label class="opt"><input type="radio" name="sidebar" value="collapsed"><b>Zwinięty</b><span>Same ikony</span></label>
+          </div></div>
+        <label class="sw"><input type="checkbox" id="apMotion"><span>Ogranicz animacje<small>Wyłącza przejścia i pulsowanie (preferencja systemu „zmniejsz ruch” też jest respektowana).</small></span></label>
+        <label class="sw"><input type="checkbox" id="apContrast"><span>Wysoki kontrast<small>Mocniejsze obramowania i wyraźniejsze kolory tekstu.</small></span></label>
+        <p class="muted">Skróty: <span class="kbd">Ctrl</span> + <span class="kbd">+</span> powiększa, <span class="kbd">Ctrl</span> + <span class="kbd">−</span> pomniejsza, <span class="kbd">Ctrl</span> + <span class="kbd">0</span> przywraca 100%, <span class="kbd">Ctrl</span> + kółko myszy zmienia skalę.</p>
+        <div class="pick"><button type="button" id="apReset">Przywróć domyślne</button></div>
+      </div>
       <label class="sw"><input type="checkbox" id="autostart"><span>Uruchamiaj razem z systemem<small>Aplikacja startuje w tle, w zasobniku systemowym.</small></span></label>
       <label class="sw"><input type="checkbox" id="notify"><span>Powiadomienia systemowe<small>O błędach, zatrzymaniu przez zabezpieczenie i konfliktach.</small></span></label>
       <label>Powiadom, gdy zadanie jest niedostępne dłużej niż (minuty, 0 = wyłączone)<input id="unavail" type="number" min="0" step="1"></label>
@@ -220,8 +243,10 @@
   <div class="df"><button id="cfNo" class="ghost">Anuluj</button><button id="cfYes" class="primary">OK</button></div>
 </dialog>
 
+<div id="zoomHud" role="status" aria-live="polite"></div>
 <div id="toasts" role="status" aria-live="polite"></div>
 <script src="i18n.js"></script>
+<script src="scale.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

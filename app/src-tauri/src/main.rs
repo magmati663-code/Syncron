@@ -585,7 +585,18 @@ async fn set_elevated_autostart(enable: bool) -> Res<()> {
         .map_err(|e| e.to_string())?
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+/// Zapamiętane położenie i rozmiar okna (piksele fizyczne; rozmiar = obszar roboczy okna).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+struct WinState {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    #[serde(default)]
+    maximized: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct Settings {
     #[serde(default = "yes")]
     notify: bool,
@@ -594,9 +605,40 @@ struct Settings {
     /// Po ilu minutach niedostępności zadania wysłać powiadomienie (0 = wyłączone).
     #[serde(default = "d30")]
     unavailable_minutes: u32,
+    /// Skala interfejsu 0.75..=2.0 (krok 0.05).
+    #[serde(default = "one")]
+    ui_scale: f64,
+    /// Skala tekstu 0.85..=1.5 (krok 0.05).
+    #[serde(default = "one")]
+    font_scale: f64,
+    /// `compact` | `normal` | `comfortable`.
+    #[serde(default = "normal")]
+    density: String,
+    /// `auto` | `expanded` | `collapsed`.
+    #[serde(default = "auto")]
+    sidebar: String,
+    #[serde(default)]
+    reduce_motion: bool,
+    #[serde(default)]
+    high_contrast: bool,
+    /// `auto` | `light` | `dark`.
+    #[serde(default = "auto")]
+    theme: String,
+    /// Zarządzane wyłącznie przez backend (zapis przy zmianie okna); `set_settings` ignoruje wartość z interfejsu.
+    #[serde(default)]
+    window: Option<WinState>,
 }
 fn d30() -> u32 {
     30
+}
+fn one() -> f64 {
+    1.0
+}
+fn normal() -> String {
+    "normal".into()
+}
+fn auto() -> String {
+    "auto".into()
 }
 fn yes() -> bool {
     true
@@ -610,6 +652,88 @@ impl Default for Settings {
             notify: true,
             language: pl(),
             unavailable_minutes: 30,
+            ui_scale: 1.0,
+            font_scale: 1.0,
+            density: normal(),
+            sidebar: auto(),
+            reduce_motion: false,
+            high_contrast: false,
+            theme: auto(),
+            window: None,
+        }
+    }
+}
+
+/// Wartość z zakresu `lo..=hi` zaokrąglona do kroku 0,05; poza zakresem lub nie-liczba = błąd.
+fn check_scale(v: f64, lo: f64, hi: f64, what: &str) -> Res<f64> {
+    if !v.is_finite() || v < lo - 1e-9 || v > hi + 1e-9 {
+        return Err(format!(
+            "{what}: dozwolony zakres to {:.0}%–{:.0}%.",
+            lo * 100.0,
+            hi * 100.0
+        ));
+    }
+    Ok(((v * 20.0).round() / 20.0).clamp(lo, hi))
+}
+
+impl Settings {
+    /// Walidacja z komunikatem po polsku (polecenie `set_settings`).
+    fn validate(&mut self) -> Res<()> {
+        if self.language != "pl" && self.language != "en" {
+            return Err("Nieobsługiwany język (dostępne: pl, en).".into());
+        }
+        if !["compact", "normal", "comfortable"].contains(&self.density.as_str()) {
+            return Err("Nieobsługiwana gęstość (dostępne: compact, normal, comfortable).".into());
+        }
+        if !["auto", "expanded", "collapsed"].contains(&self.sidebar.as_str()) {
+            return Err(
+                "Nieobsługiwany tryb paska bocznego (dostępne: auto, expanded, collapsed).".into(),
+            );
+        }
+        if !["auto", "light", "dark"].contains(&self.theme.as_str()) {
+            return Err("Nieobsługiwany motyw (dostępne: auto, light, dark).".into());
+        }
+        self.ui_scale = check_scale(self.ui_scale, 0.75, 2.0, "Skala interfejsu")?;
+        self.font_scale = check_scale(self.font_scale, 0.85, 1.5, "Skala tekstu")?;
+        self.unavailable_minutes = self.unavailable_minutes.min(10_080);
+        Ok(())
+    }
+
+    /// Łagodna naprawa wartości z pliku (uszkodzony/ręcznie edytowany settings.json nie może wyłączyć interfejsu).
+    fn sanitize(&mut self) {
+        let d = Settings::default();
+        if self.language != "pl" && self.language != "en" {
+            self.language = d.language;
+        }
+        self.ui_scale = if self.ui_scale.is_finite() {
+            ((self.ui_scale.clamp(0.75, 2.0)) * 20.0).round() / 20.0
+        } else {
+            1.0
+        };
+        self.font_scale = if self.font_scale.is_finite() {
+            ((self.font_scale.clamp(0.85, 1.5)) * 20.0).round() / 20.0
+        } else {
+            1.0
+        };
+        if !["compact", "normal", "comfortable"].contains(&self.density.as_str()) {
+            self.density = d.density;
+        }
+        if !["auto", "expanded", "collapsed"].contains(&self.sidebar.as_str()) {
+            self.sidebar = d.sidebar;
+        }
+        if !["auto", "light", "dark"].contains(&self.theme.as_str()) {
+            self.theme = d.theme;
+        }
+        if let Some(w) = &self.window {
+            if w.w < 200
+                || w.h < 150
+                || w.w > 30_000
+                || w.h > 30_000
+                || w.x.abs() > 100_000
+                || w.y.abs() > 100_000
+            {
+                self.window = None;
+            }
         }
     }
 }
@@ -617,11 +741,22 @@ impl Default for Settings {
 fn settings_path(r: &Runner) -> std::path::PathBuf {
     r.state_dir().join("settings.json")
 }
+/// Serializuje odczyt-modyfikację-zapis settings.json (polecenie `set_settings` i zapis okna z wątku tła).
+static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn load_settings(r: &Runner) -> Settings {
-    std::fs::read_to_string(settings_path(r))
+    let mut s: Settings = std::fs::read_to_string(settings_path(r))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    s.sanitize();
+    s
+}
+fn write_settings(r: &Runner, s: &Settings) -> Res<()> {
+    std::fs::write(
+        settings_path(r),
+        serde_json::to_string_pretty(s).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -630,16 +765,12 @@ fn get_settings(r: State<Runner>) -> Settings {
 }
 
 #[tauri::command]
-fn set_settings(r: State<Runner>, mut settings: Settings) -> Res<()> {
-    if settings.language != "pl" && settings.language != "en" {
-        return Err("Nieobsługiwany język (dostępne: pl, en).".into());
-    }
-    settings.unavailable_minutes = settings.unavailable_minutes.min(10_080);
-    std::fs::write(
-        settings_path(&r),
-        serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+fn set_settings(r: State<Runner>, settings: Settings) -> Res<()> {
+    let mut settings = settings;
+    settings.validate()?;
+    let _g = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    settings.window = load_settings(&r).window; // położenie okna zapisuje wyłącznie backend
+    write_settings(&r, &settings)
 }
 
 fn find_job(r: &Runner, id: &str) -> Res<Job> {
@@ -952,9 +1083,79 @@ fn locate_rclone(app: &tauri::AppHandle) {
     }
 }
 
+/// Obszar roboczy monitora (bez paska zadań) w pikselach fizycznych oraz jego skala.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Area {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    scale: f64,
+}
+
+/// Minimalny rozmiar okna (piksele logiczne).
+const MIN_W: f64 = 860.0;
+const MIN_H: f64 = 480.0;
+
+/// Przycina zapamiętane okno do dostępnych monitorów (pierwszy na liście = główny): wybiera monitor o największym
+/// przecięciu (inaczej główny), ogranicza rozmiar do obszaru roboczego i wsuwa okno w obszar (także ujemne współrzędne).
+fn restore_rect(saved: &WinState, areas: &[Area]) -> Option<(i32, i32, u32, u32)> {
+    let first = *areas.first()?;
+    let overlap = |a: &Area| -> i64 {
+        let x1 = saved.x.max(a.x) as i64;
+        let y1 = saved.y.max(a.y) as i64;
+        let x2 = (saved.x as i64 + saved.w as i64).min(a.x as i64 + a.w as i64);
+        let y2 = (saved.y as i64 + saved.h as i64).min(a.y as i64 + a.h as i64);
+        (x2 - x1).max(0) * (y2 - y1).max(0)
+    };
+    let mut best = first;
+    let mut best_ov = overlap(&first);
+    for a in &areas[1..] {
+        let o = overlap(a);
+        if o > best_ov {
+            best = *a;
+            best_ov = o;
+        }
+    }
+    let min_w = ((MIN_W * best.scale).round() as u32).min(best.w);
+    let min_h = ((MIN_H * best.scale).round() as u32).min(best.h);
+    let w = saved.w.clamp(min_w, best.w);
+    let h = saved.h.clamp(min_h, best.h);
+    let x = saved.x.clamp(best.x, best.x + (best.w - w) as i32);
+    let y = saved.y.clamp(best.y, best.y + (best.h - h) as i32);
+    Some((x, y, w, h))
+}
+
+fn monitor_areas(w: &tauri::WebviewWindow) -> Vec<Area> {
+    let to_area = |m: &tauri::Monitor| {
+        let a = m.work_area();
+        Area {
+            x: a.position.x,
+            y: a.position.y,
+            w: a.size.width,
+            h: a.size.height,
+            scale: m.scale_factor().max(0.5),
+        }
+    };
+    let mut out = Vec::new();
+    if let Ok(Some(p)) = w.primary_monitor() {
+        out.push(to_area(&p));
+    }
+    if let Ok(list) = w.available_monitors() {
+        for m in &list {
+            let a = to_area(m);
+            if !out.iter().any(|o| o.x == a.x && o.y == a.y && o.w == a.w) {
+                out.push(a);
+            }
+        }
+    }
+    out
+}
+
 /// Dopasowuje rozmiar okna do dostępnego obszaru ekranu (bez paska zadań): na niskich ekranach okno
-/// o stałej wysokości wystawało poza ekran i ucinało stopkę z przyciskami kreatora.
-fn fit_window(w: &tauri::WebviewWindow) {
+/// o stałej wysokości wystawało poza ekran i ucinało stopkę z przyciskami kreatora. Jeśli zapamiętano położenie
+/// z poprzedniego uruchomienia, jest przywracane (przycięte do aktualnych monitorów).
+fn fit_window(w: &tauri::WebviewWindow, saved: Option<&WinState>) {
     let Ok(Some(mon)) = w.current_monitor().or_else(|_| w.primary_monitor()) else {
         return;
     };
@@ -963,13 +1164,93 @@ fn fit_window(w: &tauri::WebviewWindow) {
     // zapas na ramkę i pasek tytułu okna
     let max_w = (area.size.width as f64 / scale - 24.0).max(480.0);
     let max_h = (area.size.height as f64 / scale - 48.0).max(400.0);
-    let (want_w, want_h) = (1040.0_f64.min(max_w), 700.0_f64.min(max_h));
     let _ = w.set_min_size(Some(tauri::LogicalSize::new(
-        860.0_f64.min(max_w),
-        480.0_f64.min(max_h),
+        MIN_W.min(max_w),
+        MIN_H.min(max_h),
     )));
+    if let Some(st) = saved {
+        if let Some((x, y, rw, rh)) = restore_rect(st, &monitor_areas(w)) {
+            let _ = w.set_size(tauri::PhysicalSize::new(rw, rh));
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+            if st.maximized {
+                let _ = w.maximize();
+            }
+            return;
+        }
+    }
+    let (want_w, want_h) = (1040.0_f64.min(max_w), 700.0_f64.min(max_h));
     let _ = w.set_size(tauri::LogicalSize::new(want_w, want_h));
     let _ = w.center();
+}
+
+/// Zapisuje położenie, rozmiar i stan zmaksymalizowania okna w settings.json.
+fn persist_window(w: &tauri::WebviewWindow) {
+    if w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true) {
+        return;
+    }
+    let Some(r) = w.app_handle().try_state::<Runner>() else {
+        return;
+    };
+    let maximized = w.is_maximized().unwrap_or(false);
+    let (Ok(pos), Ok(size)) = (w.outer_position(), w.inner_size()) else {
+        return;
+    };
+    let _g = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = load_settings(&r);
+    let prev = st.window.clone();
+    st.window = if maximized {
+        // przy zmaksymalizowanym oknie zachowujemy ostatni „normalny” rozmiar do przywrócenia
+        Some(match &prev {
+            Some(p) => WinState {
+                maximized: true,
+                ..p.clone()
+            },
+            None => WinState {
+                x: pos.x,
+                y: pos.y,
+                w: size.width,
+                h: size.height,
+                maximized: true,
+            },
+        })
+    } else {
+        Some(WinState {
+            x: pos.x,
+            y: pos.y,
+            w: size.width,
+            h: size.height,
+            maximized: false,
+        })
+    };
+    if st.window != prev {
+        let _ = write_settings(&r, &st);
+    }
+}
+
+static WIN_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WIN_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Zapis położenia okna z opóźnieniem (debounce): przeciąganie generuje setki zdarzeń.
+fn schedule_window_save(w: &tauri::Window) {
+    use std::sync::atomic::Ordering::SeqCst;
+    WIN_GEN.fetch_add(1, SeqCst);
+    if WIN_PENDING.swap(true, SeqCst) {
+        return;
+    }
+    let app = w.app_handle().clone();
+    let label = w.label().to_string();
+    std::thread::spawn(move || {
+        loop {
+            let g = WIN_GEN.load(SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            if WIN_GEN.load(SeqCst) == g {
+                break;
+            }
+        }
+        WIN_PENDING.store(false, SeqCst);
+        if let Some(w) = app.get_webview_window(&label) {
+            persist_window(&w);
+        }
+    });
 }
 
 fn show_main(app: &tauri::AppHandle) {
@@ -1029,6 +1310,9 @@ fn main() {
                         r.set_paused(!r.is_paused());
                     }
                     "quit" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            persist_window(&w);
+                        }
                         app.state::<Runner>().stop_all();
                         app.exit(0);
                     }
@@ -1045,7 +1329,8 @@ fn main() {
             spawn_notifier(app.handle().clone(), tray, tm);
 
             if let Some(w) = app.get_webview_window("main") {
-                fit_window(&w);
+                let saved = load_settings(&app.state::<Runner>()).window;
+                fit_window(&w, saved.as_ref());
                 if std::env::args().any(|a| a == "--hidden") {
                     let _ = w.hide();
                 }
@@ -1054,9 +1339,16 @@ fn main() {
         })
         .on_window_event(|w, ev| {
             // zamknięcie okna chowa aplikację do zasobnika; synchronizacja trwa w tle
-            if let WindowEvent::CloseRequested { api, .. } = ev {
-                let _ = w.hide();
-                api.prevent_close();
+            match ev {
+                WindowEvent::CloseRequested { api, .. } => {
+                    if let Some(ww) = w.app_handle().get_webview_window(w.label()) {
+                        persist_window(&ww);
+                    }
+                    let _ = w.hide();
+                    api.prevent_close();
+                }
+                WindowEvent::Resized(_) | WindowEvent::Moved(_) => schedule_window_save(w),
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1097,7 +1389,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_paths;
+    use super::{redact_paths, restore_rect, Area, Settings, WinState};
 
     #[test]
     fn redaguje_sciezki() {
@@ -1112,5 +1404,158 @@ mod tests {
         assert_eq!(redact_paths("\\\\serwer\\udział\\f"), "<ścieżka>");
         assert_eq!(redact_paths("https://x.pl/a i 1/2"), "https://x.pl/a i 1/2");
         assert_eq!(redact_paths("zwykły tekst"), "zwykły tekst");
+    }
+
+    #[test]
+    fn stare_ustawienia_dostaja_domyslne_nowe_pola() {
+        let s: Settings =
+            serde_json::from_str(r#"{"notify":false,"language":"en","unavailable_minutes":5}"#)
+                .unwrap();
+        assert!(!s.notify);
+        assert_eq!(s.language, "en");
+        assert_eq!(s.ui_scale, 1.0);
+        assert_eq!(s.font_scale, 1.0);
+        assert_eq!(s.density, "normal");
+        assert_eq!(s.sidebar, "auto");
+        assert_eq!(s.theme, "auto");
+        assert!(!s.reduce_motion && !s.high_contrast);
+        assert!(s.window.is_none());
+        let e: Settings = serde_json::from_str("{}").unwrap();
+        assert!(e.notify && e.language == "pl");
+    }
+
+    #[test]
+    fn ustawienia_wygladu_roundtrip() {
+        let s = Settings {
+            ui_scale: 1.25,
+            font_scale: 1.1,
+            density: "comfortable".into(),
+            sidebar: "collapsed".into(),
+            reduce_motion: true,
+            high_contrast: true,
+            theme: "dark".into(),
+            window: Some(WinState {
+                x: -10,
+                y: 20,
+                w: 1000,
+                h: 700,
+                maximized: true,
+            }),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let b: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(b.ui_scale, 1.25);
+        assert_eq!(b.density, "comfortable");
+        assert_eq!(b.window, s.window);
+    }
+
+    #[test]
+    fn walidacja_zakresow() {
+        let ok = |f: &dyn Fn(&mut Settings)| {
+            let mut s = Settings::default();
+            f(&mut s);
+            s.validate().map(|_| s)
+        };
+        assert!(ok(&|s| s.ui_scale = 0.74).is_err());
+        assert!(ok(&|s| s.ui_scale = 2.01).is_err());
+        assert!(ok(&|s| s.ui_scale = f64::NAN).is_err());
+        assert!(ok(&|s| s.font_scale = 0.8).is_err());
+        assert!(ok(&|s| s.font_scale = 1.6).is_err());
+        assert!(ok(&|s| s.density = "huge".into()).is_err());
+        assert!(ok(&|s| s.sidebar = "left".into()).is_err());
+        assert!(ok(&|s| s.theme = "pink".into()).is_err());
+        assert!(ok(&|s| s.language = "de".into()).is_err());
+        assert_eq!(ok(&|s| s.ui_scale = 0.75).unwrap().ui_scale, 0.75);
+        assert_eq!(ok(&|s| s.ui_scale = 2.0).unwrap().ui_scale, 2.0);
+        assert_eq!(ok(&|s| s.ui_scale = 1.1234).unwrap().ui_scale, 1.1);
+        assert_eq!(ok(&|s| s.font_scale = 1.5).unwrap().font_scale, 1.5);
+    }
+
+    #[test]
+    fn sanityzacja_pliku_naprawia_wartosci() {
+        let mut s: Settings = serde_json::from_str(
+            r#"{"ui_scale":9,"font_scale":0.1,"density":"x","sidebar":"y","theme":"z","language":"fr","window":{"x":0,"y":0,"w":10,"h":10}}"#,
+        )
+        .unwrap();
+        s.sanitize();
+        assert_eq!((s.ui_scale, s.font_scale), (2.0, 0.85));
+        assert_eq!(
+            (
+                s.density.as_str(),
+                s.sidebar.as_str(),
+                s.theme.as_str(),
+                s.language.as_str()
+            ),
+            ("normal", "auto", "auto", "pl")
+        );
+        assert!(s.window.is_none());
+    }
+
+    fn area(x: i32, y: i32, w: u32, h: u32) -> Area {
+        Area {
+            x,
+            y,
+            w,
+            h,
+            scale: 1.0,
+        }
+    }
+
+    #[test]
+    fn przywracanie_okna_miesci_sie_i_przycina() {
+        let main = area(0, 0, 1920, 1040);
+        // mieści się: bez zmian
+        let st = WinState {
+            x: 100,
+            y: 50,
+            w: 1000,
+            h: 700,
+            maximized: false,
+        };
+        assert_eq!(restore_rect(&st, &[main]), Some((100, 50, 1000, 700)));
+        // większe niż ekran: przycięte do obszaru roboczego
+        let big = WinState {
+            x: -50,
+            y: -50,
+            w: 5000,
+            h: 4000,
+            maximized: false,
+        };
+        assert_eq!(restore_rect(&big, &[main]), Some((0, 0, 1920, 1040)));
+        // poza ekranem (odłączony monitor): wsunięte na główny
+        let off = WinState {
+            x: 4000,
+            y: 3000,
+            w: 1000,
+            h: 700,
+            maximized: false,
+        };
+        assert_eq!(restore_rect(&off, &[main]), Some((920, 340, 1000, 700)));
+        // monitor po lewej (ujemne współrzędne) pozostaje wybrany, gdy istnieje
+        let left = area(-1280, 0, 1280, 984);
+        let on_left = WinState {
+            x: -1200,
+            y: 100,
+            w: 900,
+            h: 600,
+            maximized: false,
+        };
+        assert_eq!(
+            restore_rect(&on_left, &[main, left]),
+            Some((-1200, 100, 900, 600))
+        );
+        // monitor po lewej odłączony: okno wraca na główny
+        assert_eq!(restore_rect(&on_left, &[main]), Some((0, 100, 900, 600)));
+        // za małe: podniesione do minimum (860x480)
+        let tiny = WinState {
+            x: 10,
+            y: 10,
+            w: 300,
+            h: 200,
+            maximized: false,
+        };
+        assert_eq!(restore_rect(&tiny, &[main]), Some((10, 10, 860, 480)));
+        assert_eq!(restore_rect(&tiny, &[]), None);
     }
 }
