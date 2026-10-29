@@ -1,6 +1,6 @@
 //! Uruchamianie zadań: watcher zdarzeń z debouncingiem, polling, interwały, harmonogram dzienny, okna czasowe, ponowienia.
 use crate::conditions;
-use crate::engine::{run_job_with, Report};
+use crate::engine::{run_job_opts, Report, RunOpts};
 use crate::location::{Location, LEGACY_TRASH_DIR, TRASH_DIR};
 use crate::model::{Job, Schedule};
 use crate::names;
@@ -55,6 +55,8 @@ struct Handle {
     tx: Sender<Msg>,
     /// Numer generacji wątku: tylko wątek o aktualnym numerze może zapisywać status i wykonywać przebiegi.
     epoch: u64,
+    /// Ustawiana przy zatrzymaniu/edycji zadania: trwający przebieg przerywa się szybko i zwalnia blokadę.
+    cancel: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -329,6 +331,7 @@ impl Runner {
     pub fn start(&self, job: Job) {
         let mut handles = lock_ok(&self.inner.handles);
         if let Some(old) = handles.remove(&job.id) {
+            old.cancel.store(true, Ordering::SeqCst);
             let _ = old.tx.send(Msg::Stop);
         }
         if !job.enabled {
@@ -341,6 +344,8 @@ impl Runner {
         }
         let epoch = self.inner.next_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let (tx, rx) = channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel2 = cancel.clone();
         let (inner, dir, tx2, id) = (
             self.inner.clone(),
             self.state_dir.clone(),
@@ -353,9 +358,10 @@ impl Runner {
         });
         let _ = thread::Builder::new()
             .name(format!("job-{id}"))
-            .spawn(move || job_loop(job, rx, tx2, inner, dir, epoch))
+            .spawn(move || job_loop(job, rx, tx2, inner, dir, epoch, cancel2))
             .ok();
-        if let Some(prev) = handles.insert(id, Handle { tx, epoch }) {
+        if let Some(prev) = handles.insert(id, Handle { tx, epoch, cancel }) {
+            prev.cancel.store(true, Ordering::SeqCst);
             let _ = prev.tx.send(Msg::Stop);
         }
     }
@@ -364,6 +370,7 @@ impl Runner {
         // wątek kończy się po bieżącym przebiegu; nie blokujemy interfejsu czekaniem na niego
         let mut handles = lock_ok(&self.inner.handles);
         if let Some(h) = handles.remove(id) {
+            h.cancel.store(true, Ordering::SeqCst);
             let _ = h.tx.send(Msg::Stop);
             // stary wątek nie może już zapisywać statusu: nie zostawiamy "running" na zawsze
             set_status(&self.inner, id, |s| {
@@ -462,6 +469,33 @@ impl Runner {
         let l = self.inner.lock_for(id);
         let _g = lock_ok(&l);
         f()
+    }
+
+    /// Jak `with_job_lock`, ale czeka najwyżej `timeout` (np. gdy poprzedni przebieg wisi na martwym dysku);
+    /// `None` = blokada nie została zwolniona w tym czasie i `f` nie został wykonany.
+    pub fn with_job_lock_timeout<T>(
+        &self,
+        id: &str,
+        timeout: Duration,
+        f: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let l = self.inner.lock_for(id);
+        let end = Instant::now() + timeout;
+        loop {
+            match l.try_lock() {
+                Ok(_g) => return Some(f()),
+                Err(std::sync::TryLockError::Poisoned(p)) => {
+                    let _g = p.into_inner();
+                    return Some(f());
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if Instant::now() >= end {
+                        return None;
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
     }
 
     /// Rozsyła zdarzenie systemowe do wszystkich zadań (każde samo sprawdza, czy je interesuje).
@@ -737,6 +771,7 @@ fn job_loop(
     inner: Arc<Inner>,
     dir: PathBuf,
     epoch: u64,
+    cancel: Arc<AtomicBool>,
 ) {
     let current = || is_current(&inner, &job.id, epoch);
     let set = |f: &mut dyn FnMut(&mut Status)| set_status_ep(&inner, &job.id, epoch, f);
@@ -801,7 +836,33 @@ fn job_loop(
             }
         }
         let lock = inner.lock_for(&job.id);
-        let _guard = lock_ok(&lock);
+        // Poprzedni przebieg (np. sprzed edycji zadania) mógł jeszcze trwać: czekamy na blokadę z widocznym
+        // komunikatem, zamiast wisieć bez śladu (np. gdy system nie pozwala przerwać operacji na martwym dysku).
+        let _guard = {
+            let mut waited = 0u32;
+            loop {
+                match lock.try_lock() {
+                    Ok(g) => break g,
+                    Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        if !manual && !current() {
+                            return;
+                        }
+                        if waited == 40 {
+                            set(&mut |s| {
+                                s.state = "conditions".into();
+                                s.note = Some(
+                                    "czeka na zakończenie poprzedniego przebiegu (np. niedostępny dysk sieciowy)"
+                                        .into(),
+                                );
+                            });
+                        }
+                        waited = waited.saturating_add(1);
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            }
+        };
         // zadanie mogło zostać zatrzymane/zrestartowane w czasie oczekiwania na blokadę; przebieg
         // automatyczny wtedy pomijamy, a ręczny (już zaakceptowany przez użytkownika) dokańczamy
         if !manual && !current() {
@@ -822,7 +883,16 @@ fn job_loop(
             });
         };
         let res = catch_unwind(AssertUnwindSafe(|| {
-            run_job_with(&job, &dir, false, force, Some(&report))
+            run_job_opts(
+                &job,
+                &dir,
+                RunOpts {
+                    force,
+                    progress: Some(&report),
+                    cancel: Some(cancel.clone()),
+                    ..Default::default()
+                },
+            )
         }))
         .unwrap_or_else(|p| {
             let msg = p

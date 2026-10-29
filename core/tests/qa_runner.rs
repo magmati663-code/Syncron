@@ -879,8 +879,19 @@ fn r2_stop_during_run_does_not_block_and_thread_ends() {
         wait_until(3000, || threads_named("job-q-sdr") == 0),
         "wątek powinien się zakończyć po przebiegu"
     );
-    // zaczęty przebieg zostaje dokończony (nie ma połowicznej kopii)
-    assert!(wait_until(3000, || f.r.join("a.txt").exists()));
+    // zatrzymanie przerywa też przebieg czekający na start (nie kopiujemy już według starych ustawień),
+    // ale nigdy nie zostaje połowiczna kopia: plik albo nie istnieje, albo jest kompletny
+    thread::sleep(Duration::from_millis(300));
+    if let Ok(c) = fs::read_to_string(f.r.join("a.txt")) {
+        assert_eq!(c, "a", "połowiczna kopia");
+    }
+    assert!(
+        !fs::read_dir(&f.r)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".syncron.tmp")),
+        "nie zostaje plik tymczasowy"
+    );
 }
 
 #[test]

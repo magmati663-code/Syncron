@@ -260,18 +260,45 @@ fn save_job(r: State<Runner>, job: Job) -> Res<()> {
     if job.enabled {
         job.validate()?;
     }
-    r.update_jobs(|mut jobs| {
-        match jobs.iter().position(|j| j.id == job.id) {
-            Some(i) => {
-                if jobs[i].left != job.left || jobs[i].right != job.right {
-                    engine::reset_state(r.state_dir(), &job.id).map_err(|e| e.to_string())?;
-                }
-                jobs[i] = job.clone();
+    let previous = r.load_jobs().into_iter().find(|j| j.id == job.id);
+    // edycja przerywa trwający przebieg (stare ustawienia) i zwalnia blokadę zadania
+    r.stop(&job.id);
+    let restore = |r: &Runner| {
+        if let Some(p) = previous.clone() {
+            r.start(p);
+        }
+    };
+    if previous
+        .as_ref()
+        .is_some_and(|p| p.left != job.left || p.right != job.right)
+    {
+        // stan synchronizacji czyścimy dopiero, gdy stary przebieg na pewno skończył (inaczej mógłby jeszcze
+        // zapisać wpisy dla starych folderów, a nowy przebieg uznałby brakujące pliki za usunięte)
+        let reset = r.with_job_lock_timeout(&job.id, std::time::Duration::from_secs(15), || {
+            engine::reset_state(r.state_dir(), &job.id)
+        });
+        match reset {
+            Some(Ok(())) => {}
+            Some(Err(e)) => {
+                restore(&r);
+                return Err(e.to_string());
             }
+            None => {
+                restore(&r);
+                return Err("Poprzedni przebieg tego zadania jeszcze się kończy (np. niedostępny dysk sieciowy). Spróbuj zapisać ponownie za chwilę.".into());
+            }
+        }
+    }
+    if let Err(e) = r.update_jobs(|mut jobs| {
+        match jobs.iter().position(|j| j.id == job.id) {
+            Some(i) => jobs[i] = job.clone(),
             None => jobs.push(job.clone()),
         }
         Ok(jobs)
-    })?;
+    }) {
+        restore(&r);
+        return Err(e);
+    }
     r.start(job);
     Ok(())
 }
@@ -815,7 +842,17 @@ fn import_config(r: State<Runner>, path: String) -> Res<String> {
             match jobs.iter().position(|x| x.id == j.id) {
                 Some(i) => {
                     if jobs[i].left != j.left || jobs[i].right != j.right {
-                        engine::reset_state(r.state_dir(), &j.id).map_err(|e| e.to_string())?;
+                        r.stop(&j.id);
+                        r.with_job_lock_timeout(&j.id, std::time::Duration::from_secs(15), || {
+                            engine::reset_state(r.state_dir(), &j.id)
+                        })
+                        .ok_or_else(|| {
+                            format!(
+                                "Zadanie „{}” jeszcze się kończy — spróbuj zaimportować ponownie za chwilę.",
+                                j.name
+                            )
+                        })?
+                        .map_err(|e| e.to_string())?;
                     }
                     jobs[i] = j.clone();
                 }

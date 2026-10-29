@@ -29,6 +29,9 @@ pub struct Report {
     /// Ostrzeżenia (np. pominięte usunięcie): nie są błędami, więc nie wymuszają ponowień.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Przebieg został przerwany z zewnątrz (edycja/zatrzymanie zadania); wykonane akcje są zapisane.
+    #[serde(default)]
+    pub cancelled: bool,
     /// Plan działań (wypełniany w trybie symulacji i po wykonaniu).
     pub planned: Vec<(String, Action)>,
     /// Rozmiary (bajty) plików z `planned`, klucz jak w `planned` (dla podglądu); brak wpisu = nieznany.
@@ -535,6 +538,8 @@ pub struct RunOpts<'a> {
     pub progress: Option<ProgressFn<'a>>,
     /// Klucze ścieżek (jak w `Report.planned`), których akcji NIE wykonujemy.
     pub skip: HashSet<String>,
+    /// Ustawiana z zewnątrz (edycja/zatrzymanie zadania): przebieg przerywa się szybko, a to, co już zrobiono, zostaje spójne.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub fn run_job(job: &Job, state_dir: &Path, dry: bool, force: bool) -> anyhow::Result<Report> {
@@ -556,6 +561,7 @@ pub fn run_job_with(
             force,
             progress,
             skip: HashSet::new(),
+            cancel: None,
         },
     )
 }
@@ -691,6 +697,7 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
         force,
         progress,
         skip,
+        cancel,
     } = ro;
     let mut rep = Report {
         started: chrono::Local::now().timestamp(),
@@ -796,6 +803,10 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
     if dry || rep.blocked.is_some() {
         return Ok(rep);
     }
+    if crate::location::cancelled(cancel.as_deref()) {
+        rep.cancelled = true;
+        return Ok(rep);
+    }
 
     let now = chrono::Local::now();
     let trash = if job.trash_days > 0 {
@@ -807,6 +818,7 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
     let mut opts = Opts::new(job.use_vss, job.verify, &job.bandwidth, job.threads);
     opts.preserve_perms = job.preserve_permissions;
     opts.replace_versions = job.versioning == Versioning::Replace;
+    opts.cancel = cancel.clone();
     let ctx = Ctx {
         l: &l,
         r: &r,
@@ -829,6 +841,9 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
     std::thread::scope(|s| {
         for _ in 0..job.threads.clamp(1, 16) {
             s.spawn(|| loop {
+                if crate::location::cancelled(cancel.as_deref()) {
+                    break;
+                }
                 let item = queue.lock().unwrap().pop();
                 let Some((k, a)) = item else { break };
                 let o = exec(&k, &a, &ctx);
@@ -841,6 +856,15 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
         }
     });
 
+    // przerwanie z zewnątrz: błędy wynikłe z przerwania nie są awariami; udane akcje zostają zapisane
+    let was_cancelled = crate::location::cancelled(cancel.as_deref());
+    if was_cancelled {
+        rep.cancelled = true;
+        results
+            .lock()
+            .unwrap()
+            .retain(|o| !matches!(o, Out::Err(..) | Out::Busy(..)));
+    }
     let ts = chrono::Local::now().timestamp();
     let tx = rusqlite::Transaction::new_unchecked(&db, rusqlite::TransactionBehavior::Immediate)?;
     let hist = |kind: &str, path: &str, detail: &str| {

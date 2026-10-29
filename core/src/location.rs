@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -98,6 +98,8 @@ pub struct Opts {
     pub preserve_perms: bool,
     /// Kosz w stylu „Replace”: po zapisie wersji usuń starsze wersje tego samego pliku.
     pub replace_versions: bool,
+    /// Ustawiana z zewnątrz (np. przy edycji lub zatrzymaniu zadania): kopiowanie przerywa się szybko.
+    pub cancel: Option<std::sync::Arc<AtomicBool>>,
 }
 
 impl Opts {
@@ -108,6 +110,7 @@ impl Opts {
             bw: bw.split(threads as u32),
             preserve_perms: false,
             replace_versions: false,
+            cancel: None,
         }
     }
 }
@@ -270,7 +273,7 @@ impl Location {
                     if delay > 0 {
                         sleep(Duration::from_millis(delay));
                     }
-                    match copy_local(&src, &dst, o.verify, &o.bw) {
+                    match copy_local(&src, &dst, o.verify, &o.bw, o.cancel.as_deref()) {
                         Ok(()) => {
                             if o.preserve_perms {
                                 copy_permissions(&src, &dst);
@@ -280,7 +283,8 @@ impl Location {
                         Err(e) if is_busy(&e) => {
                             // plik zablokowany przez inny program: odczyt z migawki VSS (Windows, administrator)
                             if let Ok(snap) = o.vss.snapshot_path(&src) {
-                                match copy_local(&snap, &dst, o.verify, &o.bw) {
+                                match copy_local(&snap, &dst, o.verify, &o.bw, o.cancel.as_deref())
+                                {
                                     Ok(()) => return Ok(()),
                                     Err(e2) => last = Some(e2),
                                 }
@@ -1126,7 +1130,21 @@ pub(crate) fn create_new_tmp(dst: &Path) -> io::Result<(File, PathBuf)> {
     Err(last.unwrap_or_else(|| io::Error::other("nie można utworzyć pliku tymczasowego")))
 }
 
-pub(crate) fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -> io::Result<()> {
+/// Czy przebieg został przerwany z zewnątrz.
+pub(crate) fn cancelled(c: Option<&AtomicBool>) -> bool {
+    c.is_some_and(|c| c.load(Ordering::Relaxed))
+}
+
+/// Komunikat błędu przerwanego kopiowania (silnik rozpoznaje go i nie traktuje jak awarii).
+pub const CANCELLED_MSG: &str = "przerwano";
+
+pub(crate) fn copy_local(
+    src: &Path,
+    dst: &Path,
+    verify: bool,
+    bw: &Bandwidth,
+    cancel: Option<&AtomicBool>,
+) -> io::Result<()> {
     if let Some(parent) = dst.parent() {
         ensure_dir(parent)?;
     }
@@ -1151,11 +1169,14 @@ pub(crate) fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -
         };
         *tmp_path.borrow_mut() = Some(tmp.clone());
         let mut hasher = blake3::Hasher::new();
-        if verify || bw.current_kbps() > 0 || bw.hours.is_some() {
+        if verify || bw.current_kbps() > 0 || bw.hours.is_some() || cancel.is_some() {
             let mut buf = vec![0u8; 256 * 1024];
             let started = std::time::Instant::now();
             let mut sent: u64 = 0;
             loop {
+                if cancelled(cancel) {
+                    return Err(io::Error::other(CANCELLED_MSG));
+                }
                 let n = io::Read::read(&mut inp, &mut buf)?;
                 if n == 0 {
                     break;
@@ -1169,8 +1190,16 @@ pub(crate) fn copy_local(src: &Path, dst: &Path, verify: bool, bw: &Bandwidth) -
                 if kbps > 0 {
                     // ogranicznik: czekamy tyle, ile powinno trwać wysłanie dotychczasowych bajtów
                     let due = Duration::from_secs_f64(sent as f64 / (kbps as f64 * 1024.0));
-                    if let Some(wait) = due.checked_sub(started.elapsed()) {
-                        sleep(wait);
+                    if let Some(mut wait) = due.checked_sub(started.elapsed()) {
+                        // czekamy w krótkich odcinkach, żeby przerwanie działało od razu
+                        while !wait.is_zero() {
+                            if cancelled(cancel) {
+                                return Err(io::Error::other(CANCELLED_MSG));
+                            }
+                            let step = wait.min(Duration::from_millis(100));
+                            sleep(step);
+                            wait -= step;
+                        }
                     }
                 }
             }

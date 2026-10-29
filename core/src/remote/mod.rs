@@ -16,9 +16,9 @@ use std::sync::Arc;
 pub mod ftp;
 pub mod http;
 pub mod mem;
+pub mod ops;
 pub mod s3;
 pub mod sftp;
-pub mod ops;
 pub mod spec;
 pub mod webdav;
 

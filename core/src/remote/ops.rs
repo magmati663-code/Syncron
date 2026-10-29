@@ -189,7 +189,7 @@ pub fn upload_local(
                 .snapshot_path(src)
                 .map_err(|n| OpError::Busy(format!("{e}; {n}")))?;
             let t = crate::vss::scratch_dir()?.join("kopia");
-            copy_local(&snap, &t, false, &Bandwidth::default())?;
+            copy_local(&snap, &t, false, &Bandwidth::default(), None)?;
             source = t.clone();
             temp = Some(t);
         }
