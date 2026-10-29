@@ -655,6 +655,7 @@ fn mode_str(m: Mode) -> &'static str {
         Mode::TwoWay => "TwoWay",
         Mode::LeftToRight => "LeftToRight",
         Mode::RightToLeft => "RightToLeft",
+        Mode::Custom => "Custom",
     }
 }
 
@@ -802,6 +803,7 @@ fn check_scenario(seed: u64, c: &Combo, label: &str) {
                 }
             }
             Mode::TwoWay => assert_eq!(al, ar, "dwustronny: strony różne {ctx}"),
+            Mode::Custom => unreachable!("ten test nie używa trybu własnego"),
         }
     }
 
