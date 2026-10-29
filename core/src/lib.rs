@@ -1,6 +1,8 @@
 //! Silnik Syncron: nazwy (Unicode), reguły, planowanie, lokalizacje (lokalne/rclone), silnik i harmonogram.
 pub mod conditions;
 pub mod engine;
+pub mod ffs;
+pub mod hooks;
 pub mod legacy;
 pub mod location;
 pub mod model;

@@ -23,6 +23,23 @@ pub struct Entry {
     /// Rzeczywista ścieżka względna (znaki '/'), jak na dysku.
     pub real: String,
     pub meta: Meta,
+    /// Skróty pliku podane przez backend (rclone `lsjson --hash`): (typ, wartość); puste, gdy nieznane.
+    pub hashes: Vec<(String, String)>,
+}
+
+/// Dodatkowe opcje skanowania (filtry z zadania).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanOpts {
+    /// Pomijaj ukryte pliki i foldery (kropka na początku; Windows: atrybut Hidden).
+    pub ignore_hidden: bool,
+    /// Podążaj za dowiązaniami symbolicznymi przy odczycie (lokalnie).
+    pub follow_symlinks: bool,
+    /// Pomijaj pliki młodsze niż N dni.
+    pub min_age_days: Option<u32>,
+    /// Pomijaj pliki starsze niż N dni.
+    pub max_age_days: Option<u32>,
+    /// Pobierz skróty z rclone (do porównania zawartości).
+    pub want_hashes: bool,
 }
 
 /// Wynik listowania: klucz (NFC + małe litery) -> wpis. `collisions` to ścieżki różniące się tylko wielkością liter/normalizacją.
@@ -78,6 +95,10 @@ pub struct Opts {
     pub verify: bool,
     /// Limit prędkości przypadający na jeden transfer.
     pub bw: Bandwidth,
+    /// Unix: po skopiowaniu ustaw bity uprawnień źródła (bez setuid/setgid/sticky).
+    pub preserve_perms: bool,
+    /// Kosz w stylu „Replace”: po zapisie wersji usuń starsze wersje tego samego pliku.
+    pub replace_versions: bool,
 }
 
 impl Opts {
@@ -86,6 +107,8 @@ impl Opts {
             vss: Vss::new(use_vss),
             verify,
             bw: bw.split(threads as u32),
+            preserve_perms: false,
+            replace_versions: false,
         }
     }
 }
@@ -140,15 +163,32 @@ impl Location {
     }
 
     pub fn list(&self, rules: &RuleSet) -> Result<Listing, String> {
-        let (raw, skipped) = match self {
-            Location::Local(root) => list_local(root)?,
-            Location::Rclone(base) => list_rclone(base)?,
+        self.list_with(rules, &ScanOpts::default())
+    }
+
+    /// Listowanie z dodatkowymi filtrami zadania (ukryte, wiek plików, dowiązania, skróty).
+    pub fn list_with(&self, rules: &RuleSet, so: &ScanOpts) -> Result<Listing, String> {
+        let (raw, skipped, mut hashes) = match self {
+            Location::Local(root) => list_local(root, so)?,
+            Location::Rclone(base) => list_rclone(base, so.want_hashes)?,
         };
         let mut out = Listing {
             skipped,
             ..Listing::default()
         };
+        let now = chrono::Local::now().timestamp();
+        let age_cut = |d: u32| now.saturating_sub(d as i64 * 86_400);
         for (rel, meta) in raw {
+            if so.ignore_hidden && rel.split('/').any(|c| c.starts_with('.')) {
+                continue;
+            }
+            // młodszy niż N dni = zmodyfikowany później niż (teraz - N dni)
+            if so.min_age_days.is_some_and(|d| meta.mtime > age_cut(d)) {
+                continue;
+            }
+            if so.max_age_days.is_some_and(|d| meta.mtime < age_cut(d)) {
+                continue;
+            }
             if !rules.allows(&FileInfo {
                 path: rel.clone(),
                 size: meta.size,
@@ -159,7 +199,12 @@ impl Location {
             match out.files.entry(key) {
                 std::collections::btree_map::Entry::Occupied(_) => out.collisions.push(rel),
                 std::collections::btree_map::Entry::Vacant(v) => {
-                    v.insert(Entry { real: rel, meta });
+                    let h = hashes.remove(&rel).unwrap_or_default();
+                    v.insert(Entry {
+                        real: rel,
+                        meta,
+                        hashes: h,
+                    });
                 }
             }
         }
@@ -199,7 +244,12 @@ impl Location {
                         sleep(Duration::from_millis(delay));
                     }
                     match copy_local(&src, &dst, o.verify, &o.bw) {
-                        Ok(()) => return Ok(()),
+                        Ok(()) => {
+                            if o.preserve_perms {
+                                copy_permissions(&src, &dst);
+                            }
+                            return Ok(());
+                        }
                         Err(e) if is_busy(&e) => {
                             // plik zablokowany przez inny program: odczyt z migawki VSS (Windows, administrator)
                             if let Ok(snap) = o.vss.snapshot_path(&src) {
@@ -299,6 +349,11 @@ impl Location {
     /// Kopiuje plik do kosza synchronizacji (przed nadpisaniem). Nie nadpisuje istniejącej wersji w koszu:
     /// gdy `stamp` jest już zajęty dla tego pliku, użyty zostaje wolny wariant `stamp-N`.
     pub fn backup(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
+        self.backup_ret(rel, stamp).map(|_| ())
+    }
+
+    /// Jak `backup`; zwraca ścieżkę kopii w koszu (względem korzenia lokalizacji).
+    pub fn backup_ret(&self, rel: &str, stamp: &str) -> Result<String, OpError> {
         check_stamp(stamp)?;
         let trash_rel = self.free_trash_path(stamp, rel);
         match self {
@@ -308,23 +363,34 @@ impl Location {
                     ensure_dir(parent)?;
                 }
                 fs::copy(local_full(p, rel), dst)?;
-                Ok(())
+                Ok(trash_rel)
             }
-            Location::Rclone(_) => rclone_op(&["copyto", &self.full(rel), &self.full(&trash_rel)]),
+            Location::Rclone(_) => {
+                rclone_op(&["copyto", &self.full(rel), &self.full(&trash_rel)])?;
+                Ok(trash_rel)
+            }
         }
     }
 
     /// Przenosi plik do kosza synchronizacji (`stamp` = podfolder), albo usuwa gdy `stamp` jest puste.
     /// Istniejąca wersja w koszu nigdy nie jest nadpisywana (patrz `backup`).
     pub fn remove(&self, rel: &str, stamp: &str) -> Result<(), OpError> {
+        self.remove_ret(rel, stamp).map(|_| ())
+    }
+
+    /// Jak `remove`; zwraca ścieżkę w koszu (pusty tekst, gdy usunięto bez kosza).
+    pub fn remove_ret(&self, rel: &str, stamp: &str) -> Result<String, OpError> {
         if stamp.is_empty() {
             return match self {
                 Location::Local(p) => {
                     fs::remove_file(prepare_target(p, rel, false)?)?;
                     remove_empty_parents(p, rel);
-                    Ok(())
+                    Ok(String::new())
                 }
-                Location::Rclone(_) => rclone_op(&["deletefile", &self.full(rel)]),
+                Location::Rclone(_) => {
+                    rclone_op(&["deletefile", &self.full(rel)])?;
+                    Ok(String::new())
+                }
             };
         }
         check_stamp(stamp)?;
@@ -338,9 +404,12 @@ impl Location {
                     fs::remove_file(&src)?;
                 }
                 remove_empty_parents(p, rel);
-                Ok(())
+                Ok(trash_rel)
             }
-            Location::Rclone(_) => rclone_op(&["moveto", &self.full(rel), &self.full(&trash_rel)]),
+            Location::Rclone(_) => {
+                rclone_op(&["moveto", &self.full(rel), &self.full(&trash_rel)])?;
+                Ok(trash_rel)
+            }
         }
     }
 
@@ -653,6 +722,30 @@ fn cutoff_date(days: u32) -> Option<String> {
 }
 
 impl Location {
+    /// Kosz w stylu „Replace”: zostawia w koszu tylko wersję `keep` (ścieżka z `backup_ret`/`remove_ret`),
+    /// a starsze wersje pliku `rel` usuwa. Lokalnie (rclone: bez zmian, wersje zostają w stylu „Folders”).
+    /// Błędy są ignorowane.
+    pub fn keep_only_version(&self, rel: &str, keep: &str) {
+        let Location::Local(p) = self else { return };
+        let root = local_full(p, TRASH_DIR);
+        let Ok(rd) = fs::read_dir(&root) else { return };
+        for st in rd.flatten() {
+            let name = st.file_name().to_string_lossy().into_owned();
+            if !is_stamp(&name) || !st.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if format!("{TRASH_DIR}/{name}/{rel}") == keep {
+                continue;
+            }
+            let f = local_full(&root.join(&name), rel);
+            if f.symlink_metadata().map(|m| m.is_file()).unwrap_or(false)
+                && fs::remove_file(&f).is_ok()
+            {
+                remove_empty_parents(&root, &format!("{name}/{rel}"));
+            }
+        }
+    }
+
     /// Zostawia w koszu tylko `keep` najnowszych wersji każdego pliku (tylko przebiegi o poprawnym znaczniku).
     fn cap_versions(&self, keep: usize) {
         let Ok(items) = self.list_trash() else { return };
@@ -883,15 +976,51 @@ fn meta_of(m: &fs::Metadata) -> Option<Meta> {
     })
 }
 
-type Scan = (Vec<(String, Meta)>, Vec<String>);
+/// Skróty plików z rclone: ścieżka -> [(typ, wartość)].
+type Hashes = BTreeMap<String, Vec<(String, String)>>;
+type Scan = (Vec<(String, Meta)>, Vec<String>, Hashes);
 
-fn list_local(root: &Path) -> Result<Scan, String> {
+/// Czy plik/folder jest ukryty w sensie systemu (Windows: atrybut Hidden; Unix: tylko kropka, obsługiwana osobno).
+#[allow(unused_variables)]
+fn hidden_attr(md: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        md.file_attributes() & 0x2 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Kopiuje bity uprawnień (Unix, bez setuid/setgid/sticky). Błędy są ignorowane: to ulepszenie, nie warunek kopii.
+#[allow(unused_variables)]
+fn copy_permissions(src: &Path, dst: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(m) = fs::metadata(src) {
+            let mode = m.permissions().mode() & 0o777;
+            let _ = fs::set_permissions(dst, fs::Permissions::from_mode(mode));
+        }
+    }
+}
+
+fn list_local(root: &Path, so: &ScanOpts) -> Result<Scan, String> {
     let base = fs_path(root);
     if !base.is_dir() {
         return Err(format!("folder niedostępny: {}", root.display()));
     }
     let mut out = Vec::new();
     let mut skipped = Vec::new();
+    // przy podążaniu za dowiązaniami pamiętamy odwiedzone foldery (pętle: a -> b -> a)
+    let mut visited = std::collections::HashSet::new();
+    if so.follow_symlinks {
+        if let Ok(c) = fs::canonicalize(&base) {
+            visited.insert(c);
+        }
+    }
     let mut stack = vec![(base, String::new())];
     while let Some((dir, rel)) = stack.pop() {
         let rd = fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -905,9 +1034,38 @@ fn list_local(root: &Path) -> Result<Scan, String> {
                 ));
                 continue;
             };
-            let ft = ent.file_type().map_err(|e| format!("{name}: {e}"))?;
+            let mut ft = ent.file_type().map_err(|e| format!("{name}: {e}"))?;
+            let mut followed_md = None;
             if ft.is_symlink() {
-                continue;
+                if !so.follow_symlinks {
+                    continue;
+                }
+                // Follow: tylko odczyt; zepsute dowiązanie pomijamy po cichu
+                let Ok(md) = fs::metadata(ent.path()) else {
+                    continue;
+                };
+                if md.is_dir() {
+                    match fs::canonicalize(ent.path()) {
+                        Ok(c) if visited.insert(c.clone()) => {}
+                        _ => continue, // pętla albo folder już odwiedzony
+                    }
+                }
+                ft = md.file_type();
+                followed_md = Some(md);
+            } else if ft.is_dir() && so.follow_symlinks {
+                if let Ok(c) = fs::canonicalize(ent.path()) {
+                    visited.insert(c);
+                }
+            }
+            if so.ignore_hidden {
+                let hidden = name.starts_with('.')
+                    || match &followed_md {
+                        Some(md) => hidden_attr(md),
+                        None => ent.metadata().map(|m| hidden_attr(&m)).unwrap_or(false),
+                    };
+                if hidden {
+                    continue;
+                }
             }
             if ft.is_dir() {
                 // kosz synchronizacji pomijamy tylko w korzeniu
@@ -944,14 +1102,17 @@ fn list_local(root: &Path) -> Result<Scan, String> {
                 format!("{rel}/{name}")
             };
             if ft.is_file() {
-                let md = ent.metadata().map_err(|e| format!("{r}: {e}"))?;
+                let md = match followed_md {
+                    Some(md) => md,
+                    None => ent.metadata().map_err(|e| format!("{r}: {e}"))?,
+                };
                 if let Some(m) = meta_of(&md) {
                     out.push((r, m));
                 }
             }
         }
     }
-    Ok((out, skipped))
+    Ok((out, skipped, Hashes::new()))
 }
 
 fn open_shared(p: &Path) -> io::Result<File> {
@@ -1323,9 +1484,58 @@ fn parse_lsjson(s: &str, skip_special: bool) -> Result<Vec<(String, Meta)>, Stri
     Ok(out)
 }
 
-fn list_rclone(base: &str) -> Result<Scan, String> {
-    match run_rclone(&["lsjson", "-R", "--files-only", base]) {
+/// Skróty z odpowiedzi `lsjson --hash`: ścieżka -> [(typ, wartość)] (typy małymi literami, puste wartości pomijane).
+fn parse_lsjson_hashes(s: &str) -> Hashes {
+    let mut out = Hashes::new();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else {
+        return out;
+    };
+    for it in v.as_array().into_iter().flatten() {
+        let (Some(path), Some(h)) = (it["Path"].as_str(), it["Hashes"].as_object()) else {
+            continue;
+        };
+        let list: Vec<(String, String)> = h
+            .iter()
+            .filter_map(|(k, v)| {
+                v.as_str()
+                    .filter(|x| !x.is_empty())
+                    .map(|x| (k.to_lowercase(), x.to_lowercase()))
+            })
+            .collect();
+        if !list.is_empty() {
+            out.insert(path.to_string(), list);
+        }
+    }
+    out
+}
+
+/// Czy dwa zestawy skrótów mają wspólny typ i równe wartości (None: brak wspólnego typu - nie wiadomo).
+pub fn hashes_equal(a: &[(String, String)], b: &[(String, String)]) -> Option<bool> {
+    let mut known = false;
+    for (ka, va) in a {
+        if let Some((_, vb)) = b.iter().find(|(kb, _)| kb == ka) {
+            known = true;
+            if va != vb {
+                return Some(false);
+            }
+        }
+    }
+    known.then_some(true)
+}
+
+fn list_rclone(base: &str, want_hashes: bool) -> Result<Scan, String> {
+    let mut args = vec!["lsjson", "-R", "--files-only"];
+    if want_hashes {
+        args.push("--hash");
+    }
+    args.push(base);
+    match run_rclone(&args) {
         Ok(s) => {
+            let hashes = if want_hashes {
+                parse_lsjson_hashes(&s)
+            } else {
+                Hashes::new()
+            };
             // ścieżki ze zdalnego listingu to dane z zewnątrz: odrzucamy `..`, bezwzględne, puste itp.
             let mut skipped = Vec::new();
             let ok = parse_lsjson(&s, true)?
@@ -1342,9 +1552,11 @@ fn list_rclone(base: &str) -> Result<Scan, String> {
                     }
                 })
                 .collect();
-            Ok((ok, skipped))
+            Ok((ok, skipped, hashes))
         }
-        Err(e) if e.to_lowercase().contains("directory not found") => Ok((vec![], vec![])),
+        Err(e) if e.to_lowercase().contains("directory not found") => {
+            Ok((vec![], vec![], Hashes::new()))
+        }
         Err(e) => Err(e),
     }
 }

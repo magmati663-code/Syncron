@@ -404,6 +404,42 @@ impl Runner {
         }
     }
 
+    /// Jednorazowy przebieg „z wykluczeniami” (podgląd z ręcznymi zmianami): wykonuje plan zadania `id` bez akcji
+    /// o kluczach z `skip` (jak w `Report.planned`). Działa pod blokadą zadania, więc nie nakłada się na przebieg
+    /// harmonogramu; zabezpieczenia (masowe usuwanie) działają jak zwykle. Wynik trafia też do statusu zadania.
+    pub fn run_selected(
+        &self,
+        job: &Job,
+        skip: std::collections::HashSet<String>,
+    ) -> anyhow::Result<Report> {
+        let lock = self.inner.lock_for(&job.id);
+        let _g = lock_ok(&lock);
+        let res = crate::engine::run_job_opts(
+            job,
+            &self.state_dir,
+            crate::engine::RunOpts {
+                skip,
+                ..Default::default()
+            },
+        );
+        if let Ok(rep) = &res {
+            set_status(&self.inner, &job.id, |s| {
+                s.last_run = Some(Local::now().timestamp());
+                s.error = None;
+                s.state = if rep.blocked.is_some() {
+                    "blocked"
+                } else if rep.needs_retry() {
+                    "waiting"
+                } else {
+                    "idle"
+                }
+                .into();
+                s.last = Some(rep.clone());
+            });
+        }
+        res
+    }
+
     pub fn set_paused(&self, p: bool) {
         let was = self.inner.paused.swap(p, Ordering::SeqCst);
         if was && !p {

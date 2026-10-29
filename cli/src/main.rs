@@ -19,7 +19,8 @@ POLECENIA:
                                 uruchom zadanie raz (--dry-run: tylko symulacja, --force: pomiń zabezpieczenia)
   daemon                        działaj w tle i uruchamiaj zadania według harmonogramów (Ctrl+C: koniec)
   export <plik.json>            zapisz zadania do pliku
-  import <plik.json>            wczytaj zadania z pliku
+  import <plik.json>            wczytaj zadania z pliku (polecenia przed/po z pliku są usuwane)
+  import-ffs <plik>             zaimportuj ustawienia FreeFileSync (.ffs_gui/.ffs_batch) jako zadania wyłączone
   service install [--boot]      zainstaluj usługę w tle (domyślnie przy logowaniu; --boot: przy starcie systemu, Windows, wymaga administratora)
   service uninstall             usuń usługę
   version                       pokaż wersję
@@ -75,6 +76,58 @@ impl log::Log for StdoutLogger {
         }
     }
     fn flush(&self) {}
+}
+
+/// Skrót nowych opcji zadania (tylko te różne od domyślnych), np. `własny, treść, ukryte pomijane`.
+pub fn options_text(j: &Job) -> String {
+    use syncron_core::model::{Compare, Symlinks, Versioning};
+    use syncron_core::plan::Mode;
+    let mut v: Vec<String> = Vec::new();
+    if j.mode == Mode::Custom {
+        v.push("tryb własny".into());
+    }
+    match j.compare {
+        Compare::TimeAndSize => {}
+        Compare::SizeOnly => v.push("porównanie: rozmiar".into()),
+        Compare::Content => v.push("porównanie: zawartość".into()),
+    }
+    if j.time_tolerance_secs != 2 {
+        v.push(format!("tolerancja {} s", j.time_tolerance_secs));
+    }
+    if j.time_shift_hours > 0 {
+        v.push(format!("przesunięcie czasu ≤{} h", j.time_shift_hours));
+    }
+    if j.symlinks == Symlinks::Follow {
+        v.push("dowiązania: podążaj".into());
+    }
+    if j.ignore_hidden {
+        v.push("bez ukrytych".into());
+    }
+    if let Some(d) = j.min_age_days {
+        v.push(format!("wiek ≥{d} d"));
+    }
+    if let Some(d) = j.max_age_days {
+        v.push(format!("wiek ≤{d} d"));
+    }
+    if !j.detect_moves {
+        v.push("bez wykrywania przeniesień".into());
+    }
+    if j.preserve_permissions {
+        v.push("uprawnienia".into());
+    }
+    if j.versioning == Versioning::Replace {
+        v.push("wersje: zastępuj".into());
+    }
+    if j.run_before
+        .as_deref()
+        .is_some_and(|c| !c.trim().is_empty())
+    {
+        v.push("polecenie przed".into());
+    }
+    if j.run_after.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+        v.push("polecenie po".into());
+    }
+    v.join(", ")
 }
 
 fn sched_text(s: &Schedule) -> String {
@@ -336,8 +389,16 @@ fn check_opts(rest: &[String], allowed: &[&str]) -> Result<(), String> {
     }
 }
 
-const COMMANDS: [&str; 8] = [
-    "list", "run", "daemon", "export", "import", "service", "version", "help",
+const COMMANDS: [&str; 9] = [
+    "list",
+    "run",
+    "daemon",
+    "export",
+    "import",
+    "import-ffs",
+    "service",
+    "version",
+    "help",
 ];
 
 /// Czyta plik JSON (UTF-8, z opcjonalnym BOM) do tekstu.
@@ -390,15 +451,21 @@ fn real_main() -> Result<ExitCode, String> {
                 println!("Brak zadań (folder danych: {}).", dir.display());
             }
             for j in jobs {
+                let opts = options_text(&j);
                 println!(
-                    "{}  {}  {} {:?} {}  [{}] {}",
+                    "{}  {}  {} {:?} {}  [{}] {}{}",
                     clean(&j.id.chars().take(8).collect::<String>()),
                     clean(&j.name),
                     clean(&j.left),
                     j.mode,
                     clean(&j.right),
                     sched_text(&j.schedule),
-                    if j.enabled { "" } else { "(wyłączone)" }
+                    if j.enabled { "" } else { "(wyłączone)" },
+                    if opts.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  <{}>", clean(&opts))
+                    }
                 );
             }
         }
@@ -440,6 +507,9 @@ fn real_main() -> Result<ExitCode, String> {
             }
             for e in rep.errors.iter().chain(rep.busy.iter()) {
                 println!("  ! {}", clean(e));
+            }
+            for w in &rep.warnings {
+                println!("  * {}", clean(w));
             }
             if let Some(n) = &rep.vss_note {
                 println!("  VSS: {}", clean(n));
@@ -502,8 +572,19 @@ fn real_main() -> Result<ExitCode, String> {
         "import" => {
             check_opts(rest, &[])?;
             let f = rest.first().ok_or("podaj plik źródłowy")?;
-            let incoming: Vec<Job> = serde_json::from_str(&read_json_file(f)?)
+            let mut incoming: Vec<Job> = serde_json::from_str(&read_json_file(f)?)
                 .map_err(|e| format!("to nie jest plik konfiguracji Syncron: {e}"))?;
+            // polecenia przed/po to wykonanie dowolnego kodu: z importu nigdy ich nie przejmujemy
+            let had_hooks = incoming
+                .iter()
+                .any(|j| j.run_before.is_some() || j.run_after.is_some());
+            for j in &mut incoming {
+                j.run_before = None;
+                j.run_after = None;
+            }
+            if had_hooks {
+                eprintln!("Uwaga: usunięto polecenia przed/po z importowanych zadań (ustaw je ręcznie w aplikacji).");
+            }
             for (n, j) in incoming.iter().enumerate() {
                 for (what, v) in [
                     ("identyfikator", &j.id),
@@ -533,6 +614,20 @@ fn real_main() -> Result<ExitCode, String> {
                 Ok(jobs)
             })?;
             println!("Zaimportowano zadań: {imported}");
+        }
+        "import-ffs" => {
+            check_opts(rest, &[])?;
+            let f = rest.first().ok_or("podaj plik .ffs_gui lub .ffs_batch")?;
+            let incoming = syncron_core::ffs::read_ffs_file(Path::new(f))?;
+            let count = incoming.len();
+            runner.update_jobs(|mut jobs| {
+                jobs.extend(incoming.iter().cloned());
+                Ok(jobs)
+            })?;
+            println!("Zaimportowano zadań z FreeFileSync: {count} (wyłączone — sprawdź i włącz w aplikacji)");
+            for j in &incoming {
+                println!("  {}  {}", clean(&j.id), clean(&j.name));
+            }
         }
         "service" => service(rest, &dir)?,
         other => {

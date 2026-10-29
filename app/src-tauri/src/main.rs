@@ -753,6 +753,27 @@ fn import_config(r: State<Runner>, path: String) -> Res<String> {
     ))
 }
 
+/// Przebieg „z wykluczeniami”: wykonuje plan zadania bez akcji o kluczach z `skip` (klucze jak w `Report.planned`).
+#[tauri::command]
+async fn run_selected(r: State<'_, Runner>, id: String, skip: Vec<String>) -> Res<Report> {
+    let job = find_job(&r, &id)?;
+    let runner = r.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        runner
+            .run_selected(&job, skip.into_iter().collect())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Import ustawień z FreeFileSync (`.ffs_gui` / `.ffs_batch`). Zwraca zadania (wyłączone, bez poleceń) do zapisania
+/// przez interfejs poleceniem `save_job` po przejrzeniu; sam nic nie zapisuje.
+#[tauri::command]
+fn import_freefilesync(path: String) -> Res<Vec<Job>> {
+    syncron_core::ffs::read_ffs_file(std::path::Path::new(&path))
+}
+
 /// Elementy menu zasobnika (tłumaczone zgodnie z `settings.language`).
 struct TrayMenu {
     show: MenuItem<tauri::Wry>,
@@ -1065,6 +1086,8 @@ fn main() {
             get_diagnostics,
             open_logs_dir,
             import_config,
+            run_selected,
+            import_freefilesync,
             restart_elevated,
             set_elevated_autostart
         ])
