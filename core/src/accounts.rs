@@ -1100,7 +1100,7 @@ impl Store {
             }
             let mut public = BTreeMap::new();
             let mut secret = BTreeMap::new();
-            let mut needs_login = false;
+            let needs_login = false;
             let put = |m: &mut BTreeMap<String, String>, to: &str, from: &str| {
                 if let Some(v) = get(from) {
                     m.insert(to.to_string(), v.to_string());
@@ -1179,16 +1179,9 @@ impl Store {
                     put(&mut secret, "secret_access_key", "secret_access_key");
                     "s3"
                 }
-                "drive" | "onedrive" | "dropbox" => {
-                    needs_login = true;
-                    put(&mut public, "drive_id", "drive_id");
-                    put(&mut public, "drive_type", "drive_type");
-                    put(&mut public, "root_folder_id", "root_folder_id");
-                    match ty.as_str() {
-                        "drive" => "drive",
-                        "onedrive" => "onedrive",
-                        _ => "dropbox",
-                    }
+                "drive" | "onedrive" | "dropbox" | "crypt" => {
+                    skip(&mut rep, "nieobsługiwane w tej wersji".into());
+                    continue;
                 }
                 "" => {
                     skip(&mut rep, "sekcja bez pola type".into());

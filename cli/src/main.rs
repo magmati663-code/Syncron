@@ -372,7 +372,12 @@ fn accounts_cmd(rest: &[String], dir: &Path) -> Result<(), String> {
         Some("test") => {
             let name = rest.get(1).ok_or("podaj nazwę konta")?;
             let t = store.test(name)?;
-            println!("Połączono z kontem {} w {} ms: {}", clean(name), t.ms, clean(&t.info));
+            println!(
+                "Połączono z kontem {} w {} ms: {}",
+                clean(name),
+                t.ms,
+                clean(&t.info)
+            );
             Ok(())
         }
         Some("delete") => {

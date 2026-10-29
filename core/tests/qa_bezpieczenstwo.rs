@@ -214,11 +214,20 @@ fn sciezka_bezwzgledna_ze_zdalnego_jest_odrzucana() {
 
 #[test]
 fn zdalny_listing_z_dotdot_nie_zapisuje_poza_korzeniem() {
-    pobierz_ze_zdalnego(&["../escape.txt", "a/../../escape2.txt", "ok.txt"], |t, l| {
-        assert!(!t.join("escape.txt").exists(), "zapis poza L (../escape.txt)");
-        assert!(!t.join("escape2.txt").exists(), "zapis poza L (a/../../escape2.txt)");
-        assert!(l.join("ok.txt").exists());
-    });
+    pobierz_ze_zdalnego(
+        &["../escape.txt", "a/../../escape2.txt", "ok.txt"],
+        |t, l| {
+            assert!(
+                !t.join("escape.txt").exists(),
+                "zapis poza L (../escape.txt)"
+            );
+            assert!(
+                !t.join("escape2.txt").exists(),
+                "zapis poza L (a/../../escape2.txt)"
+            );
+            assert!(l.join("ok.txt").exists());
+        },
+    );
 }
 
 #[cfg(unix)]
@@ -327,7 +336,12 @@ fn src_vss_temp_nie_jest_przewidywalny() {
 fn src_add_remote_nie_przekazuje_sekretow_w_argumentach() {
     let s = repo_file("app/src-tauri/src/main.rs");
     // żadnych programów zewnętrznych: konta i sekrety obsługuje własny magazyn (klucze systemu / plik szyfrowany)
-    for zakazane in ["run_rclone", "set_remote_keys", "rclone_obscure", "SYNCRON_RCLONE"] {
+    for zakazane in [
+        "run_rclone",
+        "set_remote_keys",
+        "rclone_obscure",
+        "SYNCRON_RCLONE",
+    ] {
         assert!(!s.contains(zakazane), "pozostałość po rclone: {zakazane}");
     }
     let start = s.find("async fn add_remote").unwrap();

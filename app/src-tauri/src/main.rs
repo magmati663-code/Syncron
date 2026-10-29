@@ -2,10 +2,10 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use syncron_core::engine::{self, HistoryRow, Report, TrashItem};
 use syncron_core::accounts::{self, AboutInfo, DirEntryInfo, ImportReport};
-use syncron_core::remote::spec::KindSpec;
+use syncron_core::engine::{self, HistoryRow, Report, TrashItem};
 use syncron_core::model::Job;
+use syncron_core::remote::spec::KindSpec;
 use syncron_core::runner::{Runner, Status};
 use syncron_core::vss;
 use tauri::menu::{Menu, MenuItem};

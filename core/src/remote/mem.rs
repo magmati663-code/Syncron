@@ -135,12 +135,13 @@ impl MemBackend {
         }
     }
     fn check_write(&self, full: &str) -> RResult<()> {
-        if self
-            .with(|s| s.faults.fail_write_paths.iter().any(|p| full.contains(p.as_str())))
-        {
-            return Err(RError::Quota(format!(
-                "wstrzyknięty brak miejsca: {full}"
-            )));
+        if self.with(|s| {
+            s.faults
+                .fail_write_paths
+                .iter()
+                .any(|p| full.contains(p.as_str()))
+        }) {
+            return Err(RError::Quota(format!("wstrzyknięty brak miejsca: {full}")));
         }
         Ok(())
     }

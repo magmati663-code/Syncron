@@ -103,7 +103,9 @@ fn parse_table() {
         assert!(!is_remote(s), "powinno być lokalne: {s:?}");
     }
     match Location::parse("  gdrive:x  ") {
-        Location::Remote { account, root } => assert_eq!((account.as_str(), root.as_str()), ("gdrive", "x")),
+        Location::Remote { account, root } => {
+            assert_eq!((account.as_str(), root.as_str()), ("gdrive", "x"))
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -139,14 +141,18 @@ fn end_to_end_roundtrip_trash_move_delete_restore() {
     let f = fx("rt");
     let j = f.job("Mój folder/ąę", json!({}));
     write(&f.l.join("Zażółć/gęślą jaźń.txt"), "z lewej");
-    f.cloud.put("Mój folder/ąę/Łódź.txt", "z prawej", 1_700_000_000);
+    f.cloud
+        .put("Mój folder/ąę/Łódź.txt", "z prawej", 1_700_000_000);
     let rep = f.run(&j);
     assert_eq!(rep.copied, 2, "{rep:?}");
     assert_eq!(
         f.cloud.get("Mój folder/ąę/Zażółć/gęślą jaźń.txt").unwrap(),
         "z lewej"
     );
-    assert_eq!(fs::read_to_string(f.l.join("Łódź.txt")).unwrap(), "z prawej");
+    assert_eq!(
+        fs::read_to_string(f.l.join("Łódź.txt")).unwrap(),
+        "z prawej"
+    );
     // mtime zdalnego pliku zachowany po pobraniu
     let m = fs::metadata(f.l.join("Łódź.txt")).unwrap();
     let secs = filetime::FileTime::from_last_modification_time(&m).unix_seconds();
@@ -220,7 +226,11 @@ fn polish_nfd_and_case_collisions_in_remote_listing() {
     assert_eq!(l.collisions.len(), 2, "{:?}", l.collisions);
     assert!(l.files.contains_key("dir/in side.txt"));
     assert_eq!(l.files["dir/in side.txt"].meta.size, 0);
-    assert!(l.files.contains_key(".syncron-trashcan.txt"), "{:?}", l.files.keys());
+    assert!(
+        l.files.contains_key(".syncron-trashcan.txt"),
+        "{:?}",
+        l.files.keys()
+    );
     assert!(!l
         .files
         .keys()
@@ -234,7 +244,10 @@ fn long_names_and_deep_paths() {
     // 255 B w komponencie (ograniczenie większości systemów plików) i głęboka ścieżka
     let name = format!("{}.txt", "ą".repeat(120));
     assert!(name.len() <= 255);
-    let deep = (0..30).map(|i| format!("kat{i}")).collect::<Vec<_>>().join("/");
+    let deep = (0..30)
+        .map(|i| format!("kat{i}"))
+        .collect::<Vec<_>>()
+        .join("/");
     write(&f.l.join(&name), "dlugi");
     write(&f.l.join(&deep).join("g.txt"), "gleboko");
     let rep = f.run(&j);
@@ -263,7 +276,8 @@ fn nasty_names_travel_as_single_names() {
     for n in names {
         write(&f.l.join(n), &format!("l:{n}"));
     }
-    f.cloud.put("bitrix dir/a b/-z-prawej.txt", "r", 1_700_000_000);
+    f.cloud
+        .put("bitrix dir/a b/-z-prawej.txt", "r", 1_700_000_000);
     let rep = f.run(&j);
     assert!(rep.errors.is_empty() && rep.busy.is_empty(), "{rep:?}");
     for n in names {
@@ -499,7 +513,10 @@ fn busy_classification_comes_from_error_kind_not_file_name() {
         ..Default::default()
     });
     let rep = f.run(&j);
-    assert!(rep.busy.is_empty(), "limit miejsca pokazany jako zajętość: {rep:?}");
+    assert!(
+        rep.busy.is_empty(),
+        "limit miejsca pokazany jako zajętość: {rep:?}"
+    );
     assert_eq!(rep.errors.len(), 1);
 }
 
@@ -517,7 +534,11 @@ fn backup_failure_prevents_overwrite() {
     let rep = f.run(&j);
     assert_eq!(rep.copied, 0, "{rep:?}");
     assert_eq!(rep.errors.len(), 1);
-    assert_eq!(f.cloud.get("f0.txt").unwrap(), "tresc 0", "stara wersja nie może zniknąć bez kopii w koszu");
+    assert_eq!(
+        f.cloud.get("f0.txt").unwrap(),
+        "tresc 0",
+        "stara wersja nie może zniknąć bez kopii w koszu"
+    );
     f.cloud.clear_faults();
     let rep = f.run(&j);
     assert_eq!(rep.copied, 1, "{rep:?}");
@@ -557,7 +578,10 @@ fn delete_failure_busy_does_not_resurrect_or_lose() {
         assert_eq!(rep.deleted, 0, "{name}: {rep:?}");
         assert_eq!(rep.busy.len(), 1, "{name}: {rep:?}");
         assert!(f.cloud.has("f0.txt"), "{name}");
-        assert!(!f.l.join("f0.txt").exists(), "{name}: plik nie może wrócić na lewo");
+        assert!(
+            !f.l.join("f0.txt").exists(),
+            "{name}: plik nie może wrócić na lewo"
+        );
         f.cloud.clear_faults();
         let rep = f.run(&j);
         assert_eq!(rep.deleted, 1, "{name}: {rep:?}");
@@ -578,7 +602,9 @@ fn server_side_rename_failure_falls_back_to_copy_and_delete() {
     loc.remove("a/x.txt", "2026-01-02_030405").unwrap();
     assert!(!f.cloud.has("r/a/x.txt"));
     assert_eq!(
-        f.cloud.get("r/.syncron-trash/2026-01-02_030405/a/x.txt").unwrap(),
+        f.cloud
+            .get("r/.syncron-trash/2026-01-02_030405/a/x.txt")
+            .unwrap(),
         "zawartosc"
     );
     // ta sama zasada przy zwykłej zmianie nazwy w silniku: Location::rename zgłasza błąd, nic nie ginie
@@ -596,9 +622,24 @@ fn trash_slots_never_overwrite_existing_versions() {
     loc.backup("a.txt", stamp).unwrap();
     f.cloud.put("a.txt", "v3", 1_700_000_002);
     loc.remove("a.txt", stamp).unwrap();
-    assert_eq!(f.cloud.get(".syncron-trash/2026-01-02_030405/a.txt").unwrap(), "v1");
-    assert_eq!(f.cloud.get(".syncron-trash/2026-01-02_030405-1/a.txt").unwrap(), "v2");
-    assert_eq!(f.cloud.get(".syncron-trash/2026-01-02_030405-2/a.txt").unwrap(), "v3");
+    assert_eq!(
+        f.cloud
+            .get(".syncron-trash/2026-01-02_030405/a.txt")
+            .unwrap(),
+        "v1"
+    );
+    assert_eq!(
+        f.cloud
+            .get(".syncron-trash/2026-01-02_030405-1/a.txt")
+            .unwrap(),
+        "v2"
+    );
+    assert_eq!(
+        f.cloud
+            .get(".syncron-trash/2026-01-02_030405-2/a.txt")
+            .unwrap(),
+        "v3"
+    );
     assert!(!f.cloud.has("a.txt"));
 }
 
@@ -661,8 +702,14 @@ fn upload_size_mismatch_is_an_error_and_leaves_no_bad_copy() {
     let rep = f.run(&j);
     assert_eq!(rep.copied, 0, "{rep:?}");
     assert_eq!(rep.errors.len(), 1, "{rep:?}");
-    assert!(!f.cloud.has("a.txt"), "uszkodzona kopia nie może zostać na serwerze");
-    assert_eq!(fs::read_to_string(f.l.join("a.txt")).unwrap(), "dluzsza tresc");
+    assert!(
+        !f.cloud.has("a.txt"),
+        "uszkodzona kopia nie może zostać na serwerze"
+    );
+    assert_eq!(
+        fs::read_to_string(f.l.join("a.txt")).unwrap(),
+        "dluzsza tresc"
+    );
     f.cloud.clear_faults();
     assert_eq!(f.run(&j).copied, 1);
 }
@@ -765,7 +812,8 @@ fn purge_and_cap_versions_on_remote_trash() {
     let f = fx("purge");
     let loc = Location::parse(&f.cloud.spec(""));
     let t = ".syncron-trash";
-    f.cloud.put(&format!("{t}/2000-01-01_000000/stary.txt"), "1", 1);
+    f.cloud
+        .put(&format!("{t}/2000-01-01_000000/stary.txt"), "1", 1);
     f.cloud.put(&format!("{t}/obcy-folder/zostaje.txt"), "1", 1);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     f.cloud.put(&format!("{t}/{today}_010101/nowy.txt"), "1", 1);
@@ -774,9 +822,14 @@ fn purge_and_cap_versions_on_remote_trash() {
     assert!(f.cloud.has(&format!("{t}/obcy-folder/zostaje.txt")));
     assert!(f.cloud.has(&format!("{t}/{today}_010101/nowy.txt")));
     // limit wersji: zostają 2 najnowsze
-    for (i, s) in ["2026-01-01_000001", "2026-01-02_000001", "2026-01-03_000001", "2026-01-03_000001-1"]
-        .iter()
-        .enumerate()
+    for (i, s) in [
+        "2026-01-01_000001",
+        "2026-01-02_000001",
+        "2026-01-03_000001",
+        "2026-01-03_000001-1",
+    ]
+    .iter()
+    .enumerate()
     {
         f.cloud.put(&format!("{t}/{s}/a.txt"), &format!("v{i}"), 1);
     }
@@ -824,7 +877,9 @@ fn syncignore_is_read_from_remote() {
         fail_download: true,
         ..Default::default()
     });
-    assert!(Location::parse(&f.cloud.spec("")).read_text(".syncignore").is_none());
+    assert!(Location::parse(&f.cloud.spec(""))
+        .read_text(".syncignore")
+        .is_none());
 }
 
 // ======================= przeniesienia i zdalne↔zdalne =======================
@@ -855,7 +910,11 @@ fn moves_between_remotes_only_when_both_ends_report_the_same_hash() {
         let t = tempfile::tempdir().unwrap();
         let s = t.path().join("s");
         for i in 0..6 {
-            a.put(&format!("f{i}.txt"), &format!("tresc {i}"), 1_700_000_000 + i);
+            a.put(
+                &format!("f{i}.txt"),
+                &format!("tresc {i}"),
+                1_700_000_000 + i,
+            );
         }
         let mut j = job_between(&a.spec(""), &b.spec(""), json!({}));
         j.guard_pct = 100;
@@ -890,7 +949,11 @@ fn move_between_remotes_falls_back_when_server_cannot_rename() {
     let t = tempfile::tempdir().unwrap();
     let s = t.path().join("s");
     for i in 0..6 {
-        a.put(&format!("f{i}.txt"), &format!("tresc {i}"), 1_700_000_000 + i);
+        a.put(
+            &format!("f{i}.txt"),
+            &format!("tresc {i}"),
+            1_700_000_000 + i,
+        );
     }
     let mut j = job_between(&a.spec(""), &b.spec(""), json!({}));
     j.guard_pct = 100;
@@ -946,7 +1009,10 @@ fn parallel_transfers_are_concurrent_and_complete() {
     let el = t.elapsed();
     assert_eq!(rep.copied, 24, "{rep:?}");
     // sekwencyjnie: 24 * 0,15 s = 3,6 s
-    assert!(el < Duration::from_millis(3000), "brak równoległości: {el:?}");
+    assert!(
+        el < Duration::from_millis(3000),
+        "brak równoległości: {el:?}"
+    );
     for i in 0..24 {
         assert_eq!(f.cloud.get(&format!("p{i}.txt")).unwrap(), format!("{i}"));
     }
@@ -1035,8 +1101,11 @@ fn run_twice_identical_results() {
 fn listing_50k_and_dry_run() {
     let f = fx("wielki");
     for i in 0..50_000 {
-        f.cloud
-            .put(&format!("d{}/plik {i}.txt", i % 100), "x", 1_700_000_000 + i);
+        f.cloud.put(
+            &format!("d{}/plik {i}.txt", i % 100),
+            "x",
+            1_700_000_000 + i,
+        );
     }
     let loc = Location::parse(&f.cloud.spec(""));
     let t = Instant::now();
