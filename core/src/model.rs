@@ -1,5 +1,6 @@
 //! Model zadania synchronizacji i jego (de)serializacja.
-use crate::plan::{Conflict, Mode, Options};
+use crate::plan::{Cmp, Conflict, Mode, Options, PlanExt};
+pub use crate::plan::{Compare, CustomAction, CustomRules};
 use crate::rules::{Rule, RuleSet};
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,32 @@ fn d_trash() -> u32 {
 }
 fn d_threads() -> usize {
     4
+}
+fn d_tol() -> u32 {
+    2
+}
+fn d_timeout() -> u32 {
+    300
+}
+
+/// Dowiązania symboliczne.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Symlinks {
+    /// Pomijaj (domyślnie).
+    #[default]
+    Skip,
+    /// Podążaj przy ODCZYCIE (zapis przez dowiązanie nadal jest zabroniony).
+    Follow,
+}
+
+/// Styl wersji w koszu synchronizacji.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Versioning {
+    /// `.syncron-trash/<data>/ścieżka` (każdy przebieg osobny folder).
+    #[default]
+    Folders,
+    /// Jedna najnowsza kopia na plik (starsze wersje tego pliku w koszu są usuwane).
+    Replace,
 }
 
 /// Warunki uruchamiania zadania.
@@ -89,26 +116,6 @@ impl Bandwidth {
             kbps: f(self.kbps),
             off_kbps: f(self.off_kbps),
             hours: self.hours,
-        }
-    }
-
-    /// Wartość dla `rclone --bwlimit` (np. `512k` albo rozkład godzinowy `08:00,512k 18:00,off`).
-    pub fn rclone_arg(&self) -> Option<String> {
-        let k = |v: u32| {
-            if v == 0 {
-                "off".to_string()
-            } else {
-                format!("{v}k")
-            }
-        };
-        match self.hours {
-            _ if self.kbps == 0 && self.off_kbps == 0 => None,
-            None => (self.kbps > 0).then(|| k(self.kbps)),
-            Some([a, b]) => Some(format!(
-                "{a:02}:00,{} {b:02}:00,{}",
-                k(self.kbps),
-                k(self.off_kbps)
-            )),
         }
     }
 }
@@ -179,6 +186,44 @@ pub struct Job {
     pub bandwidth: Bandwidth,
     #[serde(default)]
     pub triggers: Triggers,
+    // ---- 0.8 ----
+    #[serde(default)]
+    pub compare: Compare,
+    /// Tolerancja czasu modyfikacji (s), 0..=86400.
+    #[serde(default = "d_tol")]
+    pub time_tolerance_secs: u32,
+    /// Ignoruj różnice czasu o całkowitą liczbę godzin ≤ N (0..=23).
+    #[serde(default)]
+    pub time_shift_hours: u32,
+    #[serde(default)]
+    pub symlinks: Symlinks,
+    #[serde(default)]
+    pub ignore_hidden: bool,
+    /// Pomijaj pliki młodsze niż N dni.
+    #[serde(default)]
+    pub min_age_days: Option<u32>,
+    /// Pomijaj pliki starsze niż N dni.
+    #[serde(default)]
+    pub max_age_days: Option<u32>,
+    #[serde(default = "d_true")]
+    pub detect_moves: bool,
+    /// Unix: kopiuj bity uprawnień po skopiowaniu pliku.
+    #[serde(default)]
+    pub preserve_permissions: bool,
+    #[serde(default)]
+    pub versioning: Versioning,
+    /// Reguły trybu `Mode::Custom`.
+    #[serde(default)]
+    pub custom: Option<CustomRules>,
+    /// Polecenie przed synchronizacją (błąd ≠ 0 anuluje przebieg). Nigdy nie jest importowane.
+    #[serde(default)]
+    pub run_before: Option<String>,
+    /// Polecenie po synchronizacji. Nigdy nie jest importowane.
+    #[serde(default)]
+    pub run_after: Option<String>,
+    /// Limit czasu poleceń przed/po (s), 1..=86400.
+    #[serde(default = "d_timeout")]
+    pub run_timeout_secs: u32,
 }
 
 /// Znormalizowana lokalizacja do porównań: (nazwa konta zdalnego lub None, prefiks, komponenty).
@@ -338,6 +383,49 @@ impl Job {
                 return Err("Minimalny rozmiar pliku jest większy od maksymalnego.".into());
             }
         }
+        if self.time_tolerance_secs > 86_400 {
+            return Err("Tolerancja czasu: maksymalnie 86400 s (doba).".into());
+        }
+        if self.time_shift_hours > 23 {
+            return Err("Przesunięcie czasu: 0–23 godziny.".into());
+        }
+        for (what, v) in [
+            ("Minimalny wiek pliku", self.min_age_days),
+            ("Maksymalny wiek pliku", self.max_age_days),
+        ] {
+            if v.is_some_and(|d| d > 36_500) {
+                return Err(format!("{what}: maksymalnie 36500 dni."));
+            }
+        }
+        if let (Some(min), Some(max)) = (self.min_age_days, self.max_age_days) {
+            if min > max {
+                return Err("Minimalny wiek pliku jest większy od maksymalnego — żaden plik nie spełniałby warunków.".into());
+            }
+        }
+        if !(1..=86_400).contains(&self.run_timeout_secs) {
+            return Err("Limit czasu poleceń przed/po: 1–86400 s.".into());
+        }
+        for (what, v) in [
+            ("przed synchronizacją", &self.run_before),
+            ("po synchronizacji", &self.run_after),
+        ] {
+            if let Some(c) = v {
+                if c.chars().count() > 4096 || c.contains('\0') {
+                    return Err(format!(
+                        "Polecenie {what}: zbyt długie (maks. 4096 znaków) albo zawiera znak NUL."
+                    ));
+                }
+            }
+        }
+        match (self.mode, &self.custom) {
+            (Mode::Custom, None) => {
+                return Err(
+                    "Tryb własny wymaga określenia reguł dla każdej kategorii plików.".into(),
+                )
+            }
+            (Mode::Custom, Some(c)) => c.validate()?,
+            _ => {}
+        }
         Ok(())
     }
     pub fn options(&self) -> Options {
@@ -347,6 +435,23 @@ impl Job {
             no_delete_right: self.no_delete_right,
             only_add: self.only_add,
             conflict: self.conflict,
+        }
+    }
+
+    /// Rozszerzenia planu (porównywanie, reguły trybu własnego).
+    pub fn plan_ext(&self) -> PlanExt {
+        PlanExt {
+            cmp: self.cmp(),
+            custom: self.custom.unwrap_or_default(),
+        }
+    }
+
+    /// Parametry porównywania plików wynikające z zadania.
+    pub fn cmp(&self) -> Cmp {
+        Cmp {
+            tol_secs: self.time_tolerance_secs,
+            shift_hours: self.time_shift_hours,
+            size_only: self.compare == Compare::SizeOnly,
         }
     }
 
@@ -398,6 +503,9 @@ pub fn parse_import(text: &str) -> Result<Vec<Job>, String> {
     let mut out: Vec<Job> = Vec::new();
     for mut j in jobs.drain(..) {
         j.enabled = false;
+        // polecenia z pliku od osoby trzeciej to wykonanie dowolnego kodu: nigdy nie są importowane
+        j.run_before = None;
+        j.run_after = None;
         match out.iter().position(|x| x.id == j.id) {
             Some(p) => out[p] = j,
             None => out.push(j),
@@ -418,17 +526,6 @@ mod tests {
             off_kbps: 0,
             hours: Some([8, 18]),
         };
-        assert_eq!(b.rclone_arg().unwrap(), "08:00,800k 18:00,off");
-        assert_eq!(
-            Bandwidth {
-                kbps: 500,
-                ..Default::default()
-            }
-            .rclone_arg()
-            .unwrap(),
-            "500k"
-        );
-        assert!(Bandwidth::default().rclone_arg().is_none());
         assert_eq!(b.split(4).kbps, 200);
         assert_eq!(
             Bandwidth {

@@ -144,7 +144,7 @@ fn secrets_never_in_plain_text_on_disk() {
         }
     }
     let json = fs::read_to_string(t.path().join("accounts.json")).unwrap();
-    assert!(json.contains("AKIAJAWNE") && json.contains("eu-central-1"));
+    assert!(json.contains("eu-central-1") && !json.contains("AKIAJAWNE"));
     assert!(
         json.contains("\"pass\"") && !json.contains(SECRET),
         "w pliku tylko NAZWY sekretów"
@@ -614,7 +614,7 @@ fn import_rclone_conf_creates_native_accounts_with_secrets() {
     assert_eq!(s.secret("key_file_pass"), Some("fraza klucza"));
     // s3: klucz tajny w sekretach, identyfikator jawny
     let s3 = st.params_for("s3-eu").unwrap();
-    assert_eq!(s3.get("access_key_id"), Some("AKIAEXAMPLE"));
+    assert_eq!(s3.secret("access_key_id"), Some("AKIAEXAMPLE"));
     assert_eq!(s3.secret("secret_access_key"), Some("jawny-klucz-tajny"));
     // nic jawnego na dysku poza źródłowym rclone.conf
     for (n, b) in all_files(t.path()) {

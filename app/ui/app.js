@@ -261,7 +261,7 @@ $("#jobs").addEventListener("click", async (e) => {
         if (await ask("Wymusić synchronizację?", "Zabezpieczenie zatrzymało to zadanie, bo plan wygląda podejrzanie (np. masowe usuwanie albo pusta strona). Pliki usuwane/nadpisywane trafią do kosza synchronizacji, jeśli jest włączony.", "Wymuś", true)
           && (await invoke("run_now", { id, force: true })) === false) toast("Nie uruchomiono: zadanie jest wyłączone lub właśnie się wykonuje.", "bad");
         break;
-      case "dry": dryBusy.add(id); renderJobs(); try { showReport(job.name, await invoke("dry_run", { id })); } finally { dryBusy.delete(id); renderJobs(); } break;
+      case "dry": dryBusy.add(id); renderJobs(); try { showReport(job.name, await invoke("dry_run", { id }), id); } finally { dryBusy.delete(id); renderJobs(); } break;
       case "edit": openEditor(job); break;
       case "toggle": await invoke("save_job", { job: { ...job, enabled: !job.enabled } }); await refreshJobs(); break;
       case "del": if (await ask("Usunąć zadanie?", `Zadanie „${job.name}” zostanie usunięte. Pliki na dyskach nie zostaną ruszone.`, "Usuń", true)) { await invoke("delete_job", { id }); await refreshJobs(); toast("Zadanie usunięte"); } break;
@@ -270,29 +270,105 @@ $("#jobs").addEventListener("click", async (e) => {
   refreshStatus();
 });
 
-function showReport(title, r) {
-  $("#repTitle").textContent = "Symulacja: " + title;
-  const treeHtml = diffTree(r.planned);
-  const rows = r.planned.map(([k, a]) => `<tr><td><span class="kind ${actCls(a)}">${ACTION(a)}</span></td><td data-nt>${esc(k)}${a.RenameRight || a.RenameLeft ? ` <span class="muted">(z: ${esc((a.RenameRight || a.RenameLeft).from)})</span>` : ""}</td></tr>`).join("");
-  $("#repBody").innerHTML = `<p>Przeskanowano: <b>${r.scanned_left}</b> plików po lewej i <b>${r.scanned_right}</b> po prawej. Planowanych działań: <b>${r.planned.length}</b>. <span class="muted">Nic nie zostało zmienione.</span></p>` +
-    (r.blocked ? `<div class="msg warn"><b>Zabezpieczenie zatrzymałoby synchronizację:</b> <span data-nt>${esc(r.blocked)}</span></div>` : "") +
-    (r.errors.length ? `<div class="msg" data-nt>${r.errors.map(esc).join("<br>")}</div>` : "") +
-    ((r.warnings || []).length ? `<div class="msg warn" data-nt>${r.warnings.map(esc).join("<br>")}</div>` : "") +
-    (rows ? `<div class="scroll" style="margin-top:12px">${treeHtml}</div>` : '<p class="muted">Obie strony są zgodne — nic do zrobienia.</p>');
-  $("#report").showModal();
+// Podgląd (symulacja): tabela akcji z wirtualizacją (renderowane tylko widoczne wiersze — działa płynnie dla dziesiątek tysięcy pozycji).
+const PV_RH = 34, PV_BUF = 8;
+let pv = null;
+function pvUpdateCount() {
+  if (!pv) return;
+  const sel = pv.rows.length - pv.off.size, vis = pv.view.length;
+  $("#pvCount").textContent = `Zaznaczono ${sel} z ${pv.rows.length}` + (vis !== pv.rows.length ? ` · widocznych: ${vis}` : "");
+  $("#repRun").disabled = sel === 0 || pv.busy;
 }
+function pvRender() {
+  if (!pv) return;
+  const sc = $("#pvScroll"), h = sc.clientHeight || 400, total = pv.view.length;
+  const first = Math.max(0, Math.floor(sc.scrollTop / PV_RH) - PV_BUF), last = Math.min(total, Math.ceil((sc.scrollTop + h) / PV_RH) + PV_BUF);
+  let html = first ? `<tr class="pvsp" style="height:${first * PV_RH}px"><td colspan="4"></td></tr>` : "";
+  for (let i = first; i < last; i++) {
+    const r = pv.view[i], on = !pv.off.has(r.k);
+    html += `<tr style="height:${PV_RH}px"><td class="pvc"><input type="checkbox" data-i="${i}" aria-label="wykonaj" ${on ? "checked" : ""}></td><td><span class="kind ${actCls(r.a)}">${ACTION(r.a)}</span></td>` +
+      `<td class="pvp" title="${esc(r.k)}" data-nt>${esc(r.k)}${r.from ? ` <span class="muted">(${LANG === "en" ? "from" : "z"}: ${esc(r.from)})</span>` : ""}</td><td class="pvs">${r.size == null ? "—" : fmtSize(r.size)}</td></tr>`;
+  }
+  if (last < total) html += `<tr class="pvsp" style="height:${(total - last) * PV_RH}px"><td colspan="4"></td></tr>`;
+  $("#pvBody").innerHTML = html;
+}
+function pvFilter() {
+  const q = $("#pvQ").value.trim().toLowerCase();
+  pv.view = q ? pv.rows.filter((r) => r.lc.includes(q)) : pv.rows;
+  $("#pvScroll").scrollTop = 0;
+  $("#pvEmpty").hidden = pv.view.length > 0;
+  pvRender(); pvUpdateCount();
+}
+function showReport(title, r, id) {
+  $("#repTitle").textContent = "Symulacja: " + title;
+  const planned = r.planned || [];
+  $("#repRun").hidden = true; pv = null;
+  const head = `<p>Przeskanowano: <b>${r.scanned_left}</b> plików po lewej i <b>${r.scanned_right}</b> po prawej. Planowanych działań: <b>${planned.length}</b>. <span class="muted">Nic nie zostało zmienione.</span></p>` +
+    (r.blocked ? `<div class="msg warn"><b>Zabezpieczenie zatrzymałoby synchronizację:</b> <span data-nt>${esc(r.blocked)}</span></div>` : "") +
+    ((r.errors || []).length ? `<div class="msg" data-nt>${r.errors.map(esc).join("<br>")}</div>` : "") +
+    ((r.warnings || []).length ? `<div class="msg warn" data-nt>${r.warnings.map(esc).join("<br>")}</div>` : "");
+  if (!planned.length || !id) {
+    $("#repBody").innerHTML = head + '<p class="muted">Obie strony są zgodne — nic do zrobienia.</p>';
+  } else {
+    $("#repBody").innerHTML = head +
+      `<div class="pvbar"><input id="pvQ" type="search" placeholder="Filtruj ścieżki…" aria-label="Filtruj ścieżki…"><button type="button" class="sm" id="pvAll">Zaznacz wszystko</button><button type="button" class="sm" id="pvNone">Odznacz wszystko</button><span class="muted" id="pvCount"></span></div>` +
+      `<div class="pvwrap" id="pvScroll"><table class="pvt"><thead><tr><th class="pvc"></th><th>Akcja</th><th>Ścieżka</th><th class="pvs">Rozmiar</th></tr></thead><tbody id="pvBody"></tbody></table></div>` +
+      `<p class="muted" id="pvEmpty" hidden>Brak pozycji pasujących do filtra.</p>` +
+      `<p class="muted">Odznaczone pozycje zostaną pominięte. „Wykonaj zaznaczone” uruchamia synchronizację tylko z zaznaczonymi akcjami.</p>`;
+    pv = { id, off: new Set(), busy: false, rows: planned.map(([k, a, size]) => ({ k: String(k), a, size: typeof size === "number" ? size : null, from: (a && (a.RenameRight || a.RenameLeft))?.from ?? null, lc: (String(k) + " " + ACTION(a)).toLowerCase() })) };
+    pv.view = pv.rows;
+    $("#repRun").hidden = false;
+    $("#pvScroll").addEventListener("scroll", () => { if (pv.raf) return; pv.raf = requestAnimationFrame(() => { pv.raf = 0; pvRender(); }); });
+    $("#pvQ").addEventListener("input", () => { if (pv.t) clearTimeout(pv.t); pv.t = setTimeout(pvFilter, 120); });
+    $("#pvAll").onclick = () => { pv.view.forEach((x) => pv.off.delete(x.k)); pvRender(); pvUpdateCount(); };
+    $("#pvNone").onclick = () => { pv.view.forEach((x) => pv.off.add(x.k)); pvRender(); pvUpdateCount(); };
+    $("#pvBody").addEventListener("change", (e) => {
+      const cb = e.target.closest("input[data-i]"); if (!cb) return;
+      const row = pv.view[+cb.dataset.i]; if (!row) return;
+      cb.checked ? pv.off.delete(row.k) : pv.off.add(row.k);
+      pvUpdateCount();
+    });
+  }
+  $("#report").showModal();
+  if (pv) { pvRender(); pvUpdateCount(); }
+}
+$("#repRun").onclick = async () => {
+  if (!pv || pv.busy) return;
+  const { id } = pv, skip = [...pv.off];
+  pv.busy = true; pvUpdateCount();
+  try {
+    const res = await invoke("run_selected", { id, skip });
+    if (res === false) { toast("Nie uruchomiono: zadanie jest wyłączone lub właśnie się wykonuje.", "bad"); pv.busy = false; pvUpdateCount(); return; }
+    toast(`Wykonano zaznaczone akcje: ${pv.rows.length - skip.length}`, "ok");
+    $("#report").close();
+  } catch (e) { toast(errText(e), "bad"); if (pv) { pv.busy = false; pvUpdateCount(); } }
+  refreshStatus();
+};
 $("#repClose").onclick = () => $("#report").close();
+$("#report").addEventListener("close", () => { pv = null; $("#repRun").hidden = true; });
 
 // ---------- kreator zadania ----------
 const F = () => $("#jobForm").elements;
 const STEP_NAMES = ["Krok 1 z 5 · Lokalizacje", "Krok 2 z 5 · Kierunek i usuwanie", "Krok 3 z 5 · Filtry i podfoldery", "Krok 4 z 5 · Harmonogram i warunki", "Krok 5 z 5 · Kosz, bezpieczeństwo i podsumowanie"];
 let step = 0;
 let vssInfo = { supported: false, admin: false, elevated_autostart: false };
-const DEFAULT_JOB = { bandwidth: { kbps: 0, off_kbps: 0, hours: null }, use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, triggers: { on_drive: false, on_wake: false, on_network: false }, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4 };
+const DEFAULT_JOB = { bandwidth: { kbps: 0, off_kbps: 0, hours: null }, use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, triggers: { on_drive: false, on_wake: false, on_network: false }, id: "", name: "", left: "", right: "", mode: "TwoWay", conflict: "Newer", include: [], exclude: [], schedule: { type: "Realtime", poll_secs: 300 }, enabled: true, guard_pct: 25, trash_days: 30, threads: 4,
+  compare: "TimeAndSize", time_tolerance_secs: 2, time_shift_hours: 0, symlinks: "Skip", ignore_hidden: false, min_age_days: null, max_age_days: null, detect_moves: true, preserve_permissions: false, versioning: "Folders", custom: null, run_before: null, run_after: null, run_timeout_secs: 300 };
+
+// v08: tryb „Własny”, porównywanie, opisy
+const CU_KEYS = ["left_only", "right_only", "left_newer", "right_newer", "different"];
+const CU_ROWS = { left_only: ["Tylko po lewej", "Plik istnieje tylko po lewej stronie."], right_only: ["Tylko po prawej", "Plik istnieje tylko po prawej stronie."], left_newer: ["Nowszy po lewej", "Plik jest po obu stronach, nowszy jest lewy."], right_newer: ["Nowszy po prawej", "Plik jest po obu stronach, nowszy jest prawy."], different: ["Różne przy tym samym czasie", "Ten sam czas modyfikacji, ale inny rozmiar lub zawartość."] };
+const CU_ACTS = { Skip: "Pomiń", CopyToRight: "Kopiuj w prawo →", CopyToLeft: "← Kopiuj w lewo", DeleteLeft: "Usuń po lewej", DeleteRight: "Usuń po prawej" };
+const CU_ACT_TXT = { Skip: "pomiń", CopyToRight: "kopiuj w prawo", CopyToLeft: "kopiuj w lewo", DeleteLeft: "usuń po lewej", DeleteRight: "usuń po prawej" };
+const CU_CAT_TXT = { left_only: "tylko po lewej", right_only: "tylko po prawej", left_newer: "nowszy po lewej", right_newer: "nowszy po prawej", different: "różne przy tym samym czasie" };
+const CMP_HINT = { TimeAndSize: "Plik jest taki sam, gdy zgadzają się czas modyfikacji (w tolerancji) i rozmiar. Szybkie — zawartość nie jest czytana.", SizeOnly: "Liczy się tylko rozmiar. Najszybsze, ale zmiana pliku bez zmiany rozmiaru zostanie przeoczona.", Content: "Porównywana jest zawartość pliku (suma BLAKE3). Najdokładniejsze, ale wolne: każdy plik jest czytany w całości. W chmurze używane są sumy kontrolne dostawcy, jeśli je podaje." };
+const CMP_TXT = { TimeAndSize: "czas modyfikacji i rozmiar", SizeOnly: "tylko rozmiar (najszybsze, może przeoczyć zmiany)", Content: "zawartość plików (wolniejsze, dokładniejsze)" };
+$("#customRows").innerHTML = CU_KEYS.map((k) => `<div class="crow"><div><b>${CU_ROWS[k][0]}</b><span class="muted">${CU_ROWS[k][1]}</span></div><select name="cu_${k}" aria-label="${CU_ROWS[k][0]}">${Object.entries(CU_ACTS).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>`).join("");
 
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 let edOrig = null, edInit = {}, edId = "", saving = false;
-const INIT_FIELDS = ["sched_val", "win_from", "win_to", "min_mb", "max_mb", "guard_pct", "threads", "trash_days", "max_versions", "bw_kbps", "bw_off", "bw_from", "bw_to"];
+const INIT_FIELDS = ["sched_val", "win_from", "win_to", "min_mb", "max_mb", "guard_pct", "threads", "trash_days", "max_versions", "bw_kbps", "bw_off", "bw_from", "bw_to",
+  "compare", "time_tolerance_secs", "time_shift_hours", "min_age_days", "max_age_days", "symlinks", "versioning", "run_before", "run_after", "run_timeout_secs", ...CU_KEYS.map((k) => "cu_" + k)];
 
 function openEditor(job, tpl) {
   const f = F(); $("#edErr").textContent = "";
@@ -311,10 +387,17 @@ function openEditor(job, tpl) {
   f.use_trash.checked = j.trash_days > 0; f.trash_days.value = j.trash_days > 0 ? j.trash_days : 30; f.max_versions.value = j.max_versions || 0; f.verify.checked = !!j.verify;
   f.ac_only.checked = !!j.conditions?.ac_only; f.wifi.value = (j.conditions?.wifi || []).join("\n");
   f.on_drive.checked = !!j.triggers?.on_drive; f.on_wake.checked = !!j.triggers?.on_wake; f.on_network.checked = !!j.triggers?.on_network; trashToggle(); $("#tree").innerHTML = "";
+  const D = DEFAULT_JOB, num = (v, d) => (v == null ? d : v);
+  f.compare.value = j.compare || D.compare; f.time_tolerance_secs.value = num(j.time_tolerance_secs, D.time_tolerance_secs); f.time_shift_hours.value = num(j.time_shift_hours, D.time_shift_hours);
+  f.symlinks.value = j.symlinks || D.symlinks; f.ignore_hidden.checked = !!j.ignore_hidden;
+  f.min_age_days.value = j.min_age_days != null ? j.min_age_days : ""; f.max_age_days.value = j.max_age_days != null ? j.max_age_days : "";
+  f.detect_moves.checked = j.detect_moves !== false; f.preserve_permissions.checked = !!j.preserve_permissions; f.versioning.value = j.versioning || D.versioning;
+  f.run_before.value = j.run_before ?? ""; f.run_after.value = j.run_after ?? ""; f.run_timeout_secs.value = num(j.run_timeout_secs, D.run_timeout_secs);
+  CU_KEYS.forEach((k) => (f["cu_" + k].value = j.custom?.[k] || "Skip"));
   f.guard_pct.value = j.guard_pct; f.threads.value = j.threads; f.enabled.checked = j.enabled; f.use_vss.checked = j.use_vss !== false; $("#vssRow").hidden = !vssInfo.supported;
   edInit = { sched: f.sched.value }; INIT_FIELDS.forEach((n) => (edInit[n] = f[n].value));
   $$("[data-hint]").forEach((h) => (h.textContent = ""));
-  schedHint(); nestHint(); showStep(0); $("#editor").showModal(); f.name.focus();
+  schedHint(); nestHint(); v08Hints(); showStep(0); $("#editor").showModal(); f.name.focus();
 }
 function showStep(n) {
   step = n;
@@ -329,6 +412,15 @@ function showStep(n) {
     (n === 4 ? $("#edSave") : n === 0 ? F().name : $("#edNext")).focus();
   }
 }
+function v08Hints() {
+  const f = F(), custom = f.mode.value === "Custom";
+  $("#customBox").hidden = !custom; $("#conflictRow").hidden = custom;
+  $("#customAllSkip").hidden = !custom || CU_KEYS.some((k) => f["cu_" + k].value !== "Skip");
+  $("#cmpHint").textContent = CMP_HINT[f.compare.value] || "";
+  $("#symWarn").hidden = f.symlinks.value !== "Follow";
+}
+const liveForm = (e) => { if (!(e.target.closest && e.target.closest("#jobForm"))) return; v08Hints(); if (step === 4) $("#summary").innerHTML = summarize(readJob()); };
+document.addEventListener("change", liveForm); document.addEventListener("input", liveForm);
 function schedHint() {
   const f = F(), t = f.sched.value, l = $("#schedVal");
   l.style.display = t === "Manual" ? "none" : "";
@@ -421,6 +513,18 @@ function collect() {
     else if (a !== "") { const x = int(4, "bw_from", "Limit od godziny", 0, 23, null), y = int(4, "bw_to", "Limit do godziny", 0, 23, null); if (x !== null && y !== null) hours = [x, y]; }
     bw = { kbps: kb, off_kbps: off, hours };
   }
+  // v08: porównywanie, filtry, zaawansowane. Wartość nieruszona w starym zadaniu zostaje bez zmian (brak pola = domyślna).
+  const D = DEFAULT_JOB;
+  const pick = (n, origVal, def) => (same(n) ? (origVal ?? def) : f[n].value || def);
+  const compare = pick("compare", orig?.compare, D.compare), symlinks = pick("symlinks", orig?.symlinks, D.symlinks), versioning = pick("versioning", orig?.versioning, D.versioning);
+  const tol = keep("time_tolerance_secs", orig?.time_tolerance_secs ?? D.time_tolerance_secs, () => int(1, "time_tolerance_secs", "Tolerancja czasu", 0, 86400, D.time_tolerance_secs));
+  const shift = keep("time_shift_hours", orig?.time_shift_hours ?? D.time_shift_hours, () => int(1, "time_shift_hours", "Przesunięcie czasu", 0, 23, D.time_shift_hours));
+  const minAge = keep("min_age_days", orig?.min_age_days ?? null, () => int(2, "min_age_days", "Wiek: młodsze niż (dni)", 0, 36500, null));
+  const maxAge = keep("max_age_days", orig?.max_age_days ?? null, () => int(2, "max_age_days", "Wiek: starsze niż (dni)", 0, 36500, null));
+  if (minAge !== null && maxAge !== null && minAge > maxAge) err(2, "min_age_days", "Wiek plików: „młodsze niż” nie może być większe niż „starsze niż” — żaden plik nie spełniłby obu warunków.");
+  const timeout = keep("run_timeout_secs", orig?.run_timeout_secs ?? D.run_timeout_secs, () => int(4, "run_timeout_secs", "Limit czasu poleceń", 1, 86400, D.run_timeout_secs));
+  const cmd = (n) => (same(n) ? (orig[n] ?? null) : raw(n) || null);
+  const custom = {}; CU_KEYS.forEach((k) => (custom[k] = pick("cu_" + k, orig?.custom?.[k], "Skip")));
   const job = {
     ...(orig || {}),
     id: edId, name: f.name.value.trim() || `${left} ⇄ ${right}`, left, right, mode: f.mode.value, conflict: f.conflict.value,
@@ -429,20 +533,38 @@ function collect() {
     schedule, window: win, enabled: f.enabled.checked,
     guard_pct: guard ?? 25, trash_days: trashDays ?? 0, max_versions: maxVer ?? 0, verify: f.verify.checked, bandwidth: bw,
     conditions: { ...(orig?.conditions || {}), ac_only: f.ac_only.checked, wifi: lines(f.wifi.value) }, triggers: { on_drive: f.on_drive.checked, on_wake: f.on_wake.checked, on_network: f.on_network.checked }, threads: threads ?? 4, use_vss: f.use_vss.checked,
+    compare, time_tolerance_secs: tol ?? D.time_tolerance_secs, time_shift_hours: shift ?? D.time_shift_hours, symlinks, ignore_hidden: f.ignore_hidden.checked, min_age_days: minAge, max_age_days: maxAge,
+    detect_moves: f.detect_moves.checked, preserve_permissions: f.preserve_permissions.checked, versioning,
+    custom: f.mode.value === "Custom" || orig?.custom ? custom : null, run_before: cmd("run_before"), run_after: cmd("run_after"), run_timeout_secs: timeout ?? D.run_timeout_secs,
   };
   return { job, errors };
 }
 const readJob = () => collect().job;
 function summarize(j) {
   const L = `<b data-nt>${esc(j.left || "lewa")}</b>`, R = `<b data-nt>${esc(j.right || "prawa")}</b>`, li = [];
-  li.push(j.mode === "TwoWay" ? `Zmiany z ${L} i ${R} są przenoszone na drugą stronę.` : j.mode === "LeftToRight" ? `Pliki z ${L} są kopiowane do ${R}.` : `Pliki z ${R} są kopiowane do ${L}.`);
+  if (j.mode === "Custom") {
+    li.push("Tryb własny: dla każdego rodzaju różnicy obowiązuje osobna reguła.");
+    CU_KEYS.forEach((k) => li.push(`Własny — ${CU_CAT_TXT[k]}: ${CU_ACT_TXT[j.custom?.[k] || "Skip"] || esc(j.custom?.[k])}.`));
+  } else li.push(j.mode === "TwoWay" ? `Zmiany z ${L} i ${R} są przenoszone na drugą stronę.` : j.mode === "LeftToRight" ? `Pliki z ${L} są kopiowane do ${R}.` : `Pliki z ${R} są kopiowane do ${L}.`);
+  li.push(`Porównywanie: ${CMP_TXT[j.compare] || esc(j.compare)}.`);
+  if (j.time_tolerance_secs !== 2) li.push(`Tolerancja czasu: ${j.time_tolerance_secs} s.`);
+  if (j.time_shift_hours > 0) li.push(`Ignorowane przesunięcie czasu: do ${j.time_shift_hours} godz.`);
+  if (j.min_age_days != null) li.push(`Pomijane są pliki młodsze niż ${j.min_age_days} dni.`);
+  if (j.max_age_days != null) li.push(`Pomijane są pliki starsze niż ${j.max_age_days} dni.`);
+  if (j.ignore_hidden) li.push("Pliki i foldery ukryte są pomijane.");
+  if (j.symlinks === "Follow") li.push("Dowiązania symboliczne: podążanie za nimi przy odczycie (ostrożnie).");
+  if (j.detect_moves === false) li.push("Wykrywanie przeniesień jest wyłączone: przeniesiony plik zostanie skopiowany od nowa.");
+  if (j.preserve_permissions) li.push("Uprawnienia plików są kopiowane (Linux i macOS).");
   if (j.only_add) li.push("Nic nie jest nadpisywane ani usuwane — tylko nowe pliki są dodawane.");
   else {
     if (j.no_delete_left) li.push("Po lewej stronie nic nie jest usuwane.");
     if (j.no_delete_right) li.push("Po prawej stronie nic nie jest usuwane.");
-    if (!j.no_delete_left && !j.no_delete_right) li.push(j.trash_days > 0 ? `Usunięte i nadpisane pliki trafiają do kosza na ${j.trash_days} dni${j.max_versions ? ` (maks. ${j.max_versions} wersji pliku)` : ""}.` : "Kosz wyłączony: usunięte i nadpisane pliki są tracone bez możliwości przywrócenia.");
+    if (!j.no_delete_left && !j.no_delete_right) li.push(j.trash_days > 0 ? `Usunięte i nadpisane pliki trafiają do kosza na ${j.trash_days} dni${j.max_versions ? ` (maks. ${j.max_versions} wersji pliku)` : ""}${j.versioning === "Replace" ? ", jako jedna najnowsza kopia pliku" : ""}.` : "Kosz wyłączony: usunięte i nadpisane pliki są tracone bez możliwości przywrócenia.");
   }
   if (j.bandwidth?.kbps || j.bandwidth?.off_kbps) li.push(j.bandwidth.hours ? `Limit prędkości: ${j.bandwidth.kbps || "bez limitu"} KB/s w godzinach ${j.bandwidth.hours[0]}:00–${j.bandwidth.hours[1]}:00, poza nimi ${j.bandwidth.off_kbps || "bez limitu"} KB/s.` : `Limit prędkości: ${j.bandwidth.kbps} KB/s.`);
+  if (j.run_before) li.push("Przed synchronizacją zostanie uruchomione polecenie; jego błąd anuluje przebieg.");
+  if (j.run_after) li.push("Po synchronizacji zostanie uruchomione polecenie.");
+  if (j.run_before || j.run_after) li.push(`Limit czasu poleceń: ${j.run_timeout_secs} s.`);
   if (j.verify) li.push("Po kopiowaniu sprawdzana jest suma kontrolna pliku.");
   if (j.conditions?.ac_only) li.push("Zadanie startuje tylko przy zasilaniu sieciowym.");
   if ((j.conditions?.wifi || []).length) li.push(`Zadanie startuje tylko w sieciach Wi-Fi: <span data-nt>${esc(j.conditions.wifi.join(", "))}</span>.`);
@@ -559,37 +681,54 @@ $("#exportCsv").onclick = () => {
 };
 
 // ---------- konta ----------
-const PROVIDERS = [
-  { id: "drive", name: "Google Drive", info: "Logowanie w przeglądarce", color: "#4285f4", mark: "G", kind: "drive", suggest: "gdrive", fields: [] },
-  { id: "onedrive", name: "OneDrive / SharePoint", info: "Logowanie w przeglądarce", color: "#0078d4", mark: "O", kind: "onedrive", suggest: "onedrive", fields: [] },
-  { id: "bitrix", name: "Bitrix24 Dysk", info: "WebDAV: adres, login, hasło", color: "#2fc6f6", mark: "B", kind: "webdav", suggest: "bitrix", extra: { vendor: "other" },
-    fields: [["url", "Adres WebDAV (Bitrix24 → Dysk → „Połącz dysk sieciowy”)", "https://firma.bitrix24.pl/company/personal/user/1/disk/path/"], ["user", "Login"], ["pass", "Hasło lub hasło aplikacji", "", "password"]] },
-  { id: "webdav", name: "WebDAV / Nextcloud", info: "Adres, login, hasło", color: "#64748b", mark: "W", kind: "webdav", suggest: "webdav", extra: { vendor: "other" }, fields: [["url", "Adres WebDAV"], ["user", "Login"], ["pass", "Hasło", "", "password"]] },
-  { id: "crypt", name: "Szyfrowanie (crypt)", info: "Szyfruje pliki przed wysłaniem", color: "#7c3aed", mark: "🔒", kind: "crypt", suggest: "szyfr", extra: { filename_encryption: "standard", directory_name_encryption: "true" },
-    warn: "Zapisz hasła w bezpiecznym miejscu — bez nich zaszyfrowanych danych nie da się odzyskać. Konto-źródło musi już istnieć (np. gdrive:Szyfrowane).",
-    fields: [["remote", "Konto i folder, w którym trafią zaszyfrowane pliki", "gdrive:Szyfrowane"], ["password", "Hasło szyfrowania", "", "password"], ["password2", "Dodatkowe hasło (sól, zalecane)", "", "password"]] },
-  { id: "sftp", name: "SFTP", info: "Serwer, login, hasło", color: "#16a34a", mark: "S", kind: "sftp", suggest: "sftp", fields: [["host", "Serwer"], ["user", "Login"], ["pass", "Hasło", "", "password"], ["port", "Port", "22"]] },
-];
-let prov = null;
-$("#providers").innerHTML = PROVIDERS.map((p) => `<button class="prov" data-p="${p.id}"><span class="pi" style="background:${p.color}">${p.mark}</span><b>${esc(p.name)}</b><span class="muted" style="font-weight:500;font-size:12px">${esc(p.info)}</span></button>`).join("");
+const KIND_LOOK = { gdrive: ["#4285f4", "G"], drive: ["#4285f4", "G"], onedrive: ["#0078d4", "O"], dropbox: ["#0061ff", "D"], webdav: ["#64748b", "W"], sftp: ["#16a34a", "S"], ftp: ["#ea580c", "F"], ftps: ["#c2410c", "F"], s3: ["#f59e0b", "S3"] };
+let kinds = [], curKind = null;
+async function loadKinds() {
+  try { kinds = await invoke("remote_kinds"); } catch (e) { kinds = []; $("#providers").innerHTML = `<span class="err" data-nt>${esc(errText(e, "Nie udało się wczytać listy usług."))}</span>`; return; }
+  $("#providers").innerHTML = kinds.map((p) => { const [c, m] = KIND_LOOK[p.kind] || ["#64748b", p.label.slice(0, 1)]; return `<button class="prov" data-p="${esc(p.kind)}"><span class="pi" style="background:${c}">${esc(m)}</span><b data-nt>${esc(p.label)}</b><span class="muted" style="font-weight:500;font-size:12px">${esc(p.oauth ? "Logowanie w przeglądarce" : p.help)}</span></button>`; }).join("");
+}
+function fieldHtml(f) {
+  const id = "rf_" + f.key, req = f.required ? '<b aria-hidden="true"> *</b>' : "", help = f.help ? `<span class="muted" style="font-weight:400;font-size:12px;display:block">${esc(f.help)}</span>` : "";
+  if (f.kind === "bool") return `<label style="flex-direction:row;display:flex;gap:8px;align-items:center"><input type="checkbox" id="${id}" data-f="${esc(f.key)}" data-ty="bool" ${f.default === "true" ? "checked" : ""}><span>${esc(f.label)}</span></label>${f.warn ? `<div class="msg warn" role="alert" id="${id}_w" hidden>${esc(f.warn)}</div>` : ""}${help}`;
+  if (f.kind === "select") return `<label>${esc(f.label)}${req}<select id="${id}" data-f="${esc(f.key)}" data-ty="select">${f.options.map((o) => `<option value="${esc(o.value)}" ${o.value === f.default ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>${help}</label>`;
+  if (f.kind === "password") return `<label>${esc(f.label)}${req}<span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="password" type="password" autocomplete="new-password" style="flex:1"><button type="button" class="sm ghost" data-eye="${id}" aria-label="Pokaż hasło" aria-pressed="false">Pokaż</button></span>${help}</label>`;
+  if (f.kind === "file" || f.kind === "folder") return `<label>${esc(f.label)}${req}<span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="text" style="flex:1"><button type="button" class="sm" data-file="${id}" data-dir="${f.kind === "folder" ? 1 : 0}">Wybierz…</button></span>${help}</label>`;
+  const num = f.kind === "number" ? ` type="number" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""}` : ' type="text"';
+  return `<label>${esc(f.label)}${req}<input id="${id}" data-f="${esc(f.key)}" data-ty="${esc(f.kind)}"${num} value="${esc(f.default && f.kind === "number" ? f.default : "")}" placeholder="${esc(f.kind === "text" && f.default ? f.default : "")}">${help}</label>`;
+}
 $("#providers").addEventListener("click", (e) => {
   const b = e.target.closest("[data-p]"); if (!b) return;
-  prov = PROVIDERS.find((p) => p.id === b.dataset.p);
+  curKind = kinds.find((p) => p.kind === b.dataset.p); if (!curKind) return;
   $$(".prov").forEach((x) => x.classList.toggle("sel", x === b));
-  $("#rForm").hidden = false; $("#rName").value = prov.suggest; $("#rMsg").textContent = "";
-  $("#rFields").innerHTML = (prov.warn ? `<div class="msg warn">${esc(prov.warn)}</div>` : "") + prov.fields.map(([k, l, ph, ty]) => `<label>${esc(l)}<input data-f="${k}" type="${ty || "text"}" placeholder="${esc(ph || "")}"></label>`).join("") ||
-    '<p class="muted">Po kliknięciu „Połącz konto” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>';
+  $("#rForm").hidden = false; $("#rName").value = curKind.kind; $("#rMsg").textContent = "";
+  $("#rAdd").textContent = curKind.oauth ? "Zaloguj przez przeglądarkę" : "Połącz konto";
+  $("#rFields").innerHTML = (curKind.oauth ? '<p class="muted">Po kliknięciu „Zaloguj przez przeglądarkę” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>' : "") + curKind.fields.map(fieldHtml).join("");
 });
+$("#rFields").addEventListener("click", async (e) => {
+  const eye = e.target.closest("[data-eye]"), fb = e.target.closest("[data-file]");
+  if (eye) { const i = $("#" + eye.dataset.eye), show = i.type === "password"; i.type = show ? "text" : "password"; eye.textContent = show ? "Ukryj" : "Pokaż"; eye.setAttribute("aria-pressed", show); }
+  if (fb) { try { const p = await dialogApi.open({ directory: fb.dataset.dir === "1", multiple: false }); if (p) $("#" + fb.dataset.file).value = p; } catch (err) { toast(errText(err), "bad"); } }
+});
+$("#rFields").addEventListener("change", (e) => { const w = $("#" + e.target.id + "_w"); if (w && e.target.type === "checkbox") w.hidden = !e.target.checked; });
+function collectRemote() {
+  const params = {};
+  $$("#rFields [data-f]").forEach((i) => {
+    const ty = i.dataset.ty;
+    if (ty === "bool") params[i.dataset.f] = i.checked ? "true" : "false";
+    else if (ty === "password") params[i.dataset.f] = i.value; // hasła bez przycinania
+    else params[i.dataset.f] = i.value.trim();
+  });
+  return params;
+}
 $("#rAdd").onclick = async () => {
-  if ($("#rAdd").disabled) return;
-  const params = { ...(prov.extra || {}) };
-  // hasła wysyłamy bez zmian (spacje mogą być częścią hasła); pozostałe pola przycinamy
-  $$("#rFields input").forEach((i) => (params[i.dataset.f] = i.type === "password" ? i.value : i.value.trim()));
-  const name = $("#rName").value.trim();
+  if ($("#rAdd").disabled || !curKind) return;
+  const name = $("#rName").value.trim(), params = collectRemote();
+  for (const f of curKind.fields) if (f.required && !params[f.key]) { $("#rMsg").textContent = `Uzupełnij pole „${f.label}”.`; return; }
+  for (const f of curKind.fields) if (f.kind === "number" && params[f.key] !== "") { const n = Number(params[f.key]); if (!Number.isInteger(n) || (f.min != null && n < f.min) || (f.max != null && n > f.max)) { $("#rMsg").textContent = `Pole „${f.label}” poza zakresem (${f.min ?? ""}–${f.max ?? ""}).`; return; } }
   if (remotes.some((r) => r.name === name) && !(await ask("Nadpisać istniejące konto?", `Konto „${name}” już istnieje. Dodanie konta pod tą samą nazwą nadpisze jego konfigurację. Aby tego uniknąć, zmień nazwę.`, "Nadpisz", true))) return;
-  $("#rMsg").textContent = "Łączenie… (dokończ logowanie w przeglądarce, jeśli się otworzyła)"; $("#rAdd").disabled = true;
-  try { await invoke("add_remote", { name, kind: prov.kind, params }); $("#rMsg").textContent = ""; $("#rForm").hidden = true; toast("Konto dodane", "ok"); await loadRemotes(); }
-  catch (e) { $("#rMsg").textContent = "Błąd: " + e; }
+  $("#rMsg").textContent = curKind.oauth ? "Czekam na logowanie w przeglądarce…" : "Łączenie…"; $("#rAdd").disabled = true;
+  try { await invoke("add_remote", { name, kind: curKind.kind, params }); $("#rMsg").textContent = ""; $("#rForm").hidden = true; toast("Konto dodane", "ok"); await loadRemotes(); }
+  catch (e) { $("#rMsg").textContent = "Błąd: " + errText(e); }
   $("#rAdd").disabled = false;
 };
 let remotesSeq = 0;
@@ -597,17 +736,53 @@ async function loadRemotes() {
   const my = ++remotesSeq; let err = "";
   try { const r = await invoke("list_remotes"); if (my !== remotesSeq) return; remotes = r; clearWarn("list_remotes"); }
   catch (e) { if (my !== remotesSeq) return; err = errText(e, "Nie udało się odczytać listy kont."); warnOnce("list_remotes", "Nie udało się wczytać kont: " + err); }
-  fillRemoteSelects();
+  fillRemoteSelects(); updateBrowseBtns();
   $("#remotes").innerHTML = err ? `<span class="err" data-nt>${esc("Nie udało się wczytać kont: " + err)}</span>`
-    : remotes.length ? remotes.map((r) => `<div class="remote"><span class="loc" style="padding:0;border:0;background:none"><span class="ic">${icon("cloud")}</span></span><div class="grow"><b data-nt>${esc(r.name)}:</b> <span class="muted" data-nt>${esc(r.kind)}</span></div><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button></div>`).join("") : '<span class="muted">Brak połączonych kont. Wybierz usługę poniżej.</span>';
+    : remotes.length ? remotes.map((r) => `<div class="remote" style="flex-wrap:wrap"><span class="loc" style="padding:0;border:0;background:none"><span class="ic">${icon("cloud")}</span></span><div class="grow"><b data-nt>${esc(r.name)}:</b> <span class="muted" data-nt>${esc(r.kind)}</span></div><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm" data-b="${esc(r.name)}">Przeglądaj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button><div class="rtest muted" style="flex-basis:100%" data-rt="${esc(r.name)}" role="status"></div></div>`).join("") : '<span class="muted">Brak połączonych kont. Wybierz usługę poniżej.</span>';
+}
+function showTest(name, res) {
+  const el = $$("#remotes [data-rt]").find((x) => x.dataset.rt === name); if (!el) return;
+  if (typeof res === "string") { el.className = "rtest ok"; el.innerHTML = `<span data-nt>${esc(res)}</span>`; return; }
+  if (res.ok) { el.className = "rtest ok"; el.innerHTML = `<span>${esc(res.message || "Połączono.")}</span> <span class="muted">(${esc(res.ms)} ms)</span>`; }
+  else { el.className = "rtest err"; el.innerHTML = `<b>Błąd połączenia.</b> ${res.hint ? `<span>${esc(res.hint)}</span> ` : ""}<span class="muted" data-nt>${esc(res.error || "")}</span> <span class="muted">(${esc(res.ms ?? 0)} ms)</span>`; }
 }
 $("#remotes").addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d;
+  const t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d, br = e.target.closest("[data-b]")?.dataset.b;
   try {
-    if (t) { e.target.disabled = true; toast(await invoke("test_remote", { name: t }), "ok"); e.target.disabled = false; }
+    if (t) { const btn = e.target.closest("[data-t]"); btn.disabled = true; showTest(t, "Testuję…"); try { showTest(t, await invoke("test_remote", { name: t })); } catch (err) { showTest(t, { ok: false, error: errText(err), hint: "", ms: 0 }); } btn.disabled = false; }
+    if (br) openBrowser(br, "", null);
     if (d && (await ask("Usunąć konto?", `Konto „${d}” zostanie usunięte z aplikacji (dane w chmurze zostają).`, "Usuń", true))) { await invoke("delete_remote", { name: d }); await loadRemotes(); }
-  } catch (err) { toast("Błąd: " + err, "bad"); loadRemotes(); }
+  } catch (err) { toast("Błąd: " + errText(err), "bad"); loadRemotes(); }
 });
+
+// ---------- przeglądarka folderów zdalnych ----------
+let rb = { name: "", path: "", side: null, seq: 0 };
+async function openBrowser(name, path, side) {
+  rb = { name, path, side, seq: rb.seq };
+  $("#rbClose").textContent = side ? "Gotowe" : "Zamknij";
+  if (!$("#rbrowse").open) $("#rbrowse").showModal();
+  await browseTo(path);
+}
+async function browseTo(path) {
+  const my = ++rb.seq; rb.path = path;
+  $("#rbPath").textContent = rb.name + ":" + path; $("#rbMsg").textContent = "Wczytywanie…"; $("#rbList").innerHTML = "";
+  if (rb.side) { F()[rb.side].value = rb.name + ":" + path; checkPath(rb.side); }
+  try {
+    const list = await invoke("browse_remote", { name: rb.name, path });
+    if (my !== rb.seq) return;
+    $("#rbMsg").textContent = list.length ? "" : "Brak podfolderów.";
+    $("#rbList").innerHTML = list.filter((x) => x.is_dir !== false).map((x) => `<button type="button" class="sm ghost" role="listitem" style="display:block;width:100%;text-align:left" data-dir="${esc(x.name)}"><span class="ic">${icon("folder")}</span> <span data-nt>${esc(x.name)}</span></button>`).join("");
+  } catch (e) { if (my !== rb.seq) return; $("#rbMsg").textContent = "Nie udało się wczytać folderów: " + errText(e); }
+}
+$("#rbList").addEventListener("click", (e) => { const b = e.target.closest("[data-dir]"); if (b) browseTo(rb.path ? rb.path + "/" + b.dataset.dir : b.dataset.dir); });
+$("#rbUp").onclick = () => browseTo(rb.path.split("/").slice(0, -1).join("/"));
+$("#rbClose").onclick = () => $("#rbrowse").close();
+// kreator: przycisk „Przeglądaj…” widoczny, gdy ścieżka zaczyna się od nazwy znanego konta
+function remoteOf(v) { const m = /^([A-Za-z0-9][A-Za-z0-9_-]+):(.*)$/.exec(v.trim()); return m && remotes.some((r) => r.name === m[1]) ? { name: m[1], path: m[2].replace(/^\/+|\/+$/g, "") } : null; }
+function updateBrowseBtns() { ["left", "right"].forEach((s) => { const b = $(`[data-browse=${s}]`); if (b) b.hidden = !remoteOf(F()[s].value); }); }
+["left", "right"].forEach((s) => { ["input", "change"].forEach((ev) => F()[s].addEventListener(ev, updateBrowseBtns)); });
+$$("[data-browse]").forEach((b) => b.addEventListener("click", () => { const r = remoteOf(F()[b.dataset.browse].value); if (r) openBrowser(r.name, r.path, b.dataset.browse); }));
+$("#editor").addEventListener("toggle", updateBrowseBtns);
 
 // ---------- ustawienia i start ----------
 $("#pauseAll").onclick = async () => {
@@ -638,25 +813,8 @@ $("#vssAuto").onchange = async (e) => {
 };
 hydrateIcons();
 loadVss();
-loadRemotes(); refreshJobs().then(refreshStatus);
+loadKinds(); loadRemotes(); refreshJobs().then(refreshStatus);
 setInterval(refreshStatus, 2000);
-
-// ---------- drzewo różnic (symulacja) ----------
-function diffTree(planned) {
-  const root = { kids: {}, items: [], n: 0 };
-  for (const [k, a] of planned) {
-    const parts = k.split("/"), file = parts.pop(); let node = root; node.n++;
-    for (const p of parts) { node = node.kids[p] ||= { kids: {}, items: [], n: 0 }; node.n++; }
-    node.items.push([file, a]);
-  }
-  const cls = actCls;
-  const render = (node, name, open) => {
-    const items = node.items.map(([f, a]) => `<div style="padding:2px 0 2px 18px"><span class="kind ${cls(a)}">${ACTION(a)}</span> <span data-nt>${esc(f)}</span></div>`).join("");
-    const kids = Object.entries(node.kids).sort(([a], [b]) => a.localeCompare(b, LOCALE)).map(([n, c]) => render(c, n, false)).join("");
-    return name === null ? items + kids : `<details ${open ? "open" : ""} style="margin-left:6px"><summary style="cursor:pointer;padding:3px 0"><b data-nt>${esc(name)}</b> <span class="muted">(${node.n})</span></summary>${items}${kids}</details>`;
-  };
-  return render(root, null, true);
-}
 
 // ---------- drzewo podfolderów ----------
 const includeList = () => F().include.value.split("\n").map((x) => x.trim()).filter(Boolean);
@@ -686,7 +844,7 @@ $("#tree").addEventListener("change", (e) => {
   cb.checked ? set.add(pat) : set.delete(pat);
   F().include.value = [...set].join("\n");
 });
-function trashToggle() { const on = F().use_trash.checked; $$("#trashOpts input").forEach((i) => (i.disabled = !on)); }
+function trashToggle() { const on = F().use_trash.checked; $$("#trashOpts input,#trashOpts select").forEach((i) => (i.disabled = !on)); }
 F().use_trash.addEventListener("change", trashToggle);
 
 // ---------- kosz i wersje ----------
@@ -741,7 +899,7 @@ $("#trashEmpty").onclick = async () => {
 // ---------- ustawienia: powiadomienia, język, aktualizacje, kopia ----------
 (async () => {
   let st = { notify: true, language: LANG, unavailable_minutes: 30 }, ok = true;
-  try { st = await invoke("get_settings"); }
+  try { st = await invoke("get_settings"); if (window.SyncronScale) SyncronScale.init(st); }
   catch (e) {
     ok = false; toast("Nie udało się wczytać ustawień — widoczne wartości są domyślne i nie zostaną zapisane: " + errText(e, "błąd odczytu"), "bad");
     $$("#notify,#unavail").forEach((i) => (i.disabled = true));
@@ -757,7 +915,7 @@ $("#trashEmpty").onclick = async () => {
   $("#unavail").value = lastUnavail;
   const save = async () => {
     if (!ok) return false;
-    try { await invoke("set_settings", { settings: { notify: $("#notify").checked, language: $("input[name=lang]:checked").value, unavailable_minutes: lastUnavail } }); return true; }
+    try { const ns = Object.assign({}, window.SyncronScale ? SyncronScale.raw() : {}, { notify: $("#notify").checked, language: $("input[name=lang]:checked").value, unavailable_minutes: lastUnavail }); await invoke("set_settings", { settings: ns }); if (window.SyncronScale) SyncronScale.adopt(ns); return true; }
     catch (e) { toast(errText(e), "bad"); return false; }
   };
   $("#notify").onchange = save;
@@ -800,7 +958,7 @@ $("#diagCopy").onclick = async () => {
   try {
     const text = await invoke("get_diagnostics");
     try { await navigator.clipboard.writeText(text); toast("Diagnostyka skopiowana do schowka", "ok"); }
-    catch { $("#repTitle").textContent = "Diagnostyka"; $("#repBody").innerHTML = `<p class="muted">Zaznacz całość (Ctrl/Cmd+A) i skopiuj.</p><textarea readonly rows="18" style="font-family:monospace;font-size:12px">${esc(text)}</textarea>`; $("#report").showModal(); }
+    catch { $("#repRun").hidden = true; $("#repTitle").textContent = "Diagnostyka"; $("#repBody").innerHTML = `<p class="muted">Zaznacz całość (Ctrl/Cmd+A) i skopiuj.</p><textarea readonly rows="18" style="font-family:monospace;font-size:12px">${esc(text)}</textarea>`; $("#report").showModal(); }
   } catch (e) { toast(String(e), "bad"); }
 };
 
@@ -811,3 +969,38 @@ function conflictInfo(rep, path) {
   const side = (name, m, o) => `<b>${name}</b> ${fmtSize(m.size)}${m.size > o.size ? " (większa)" : ""}, ${fmtTime(m.mtime)}${m.mtime > o.mtime ? " (nowsza)" : ""}`;
   return `${side("Lewa:", d.left, d.right)}<br>${side("Prawa:", d.right, d.left)}`;
 }
+
+// ---------- import z FreeFileSync (v08) ----------
+let ffsJobs = [];
+const MODE_TXT = { TwoWay: "dwustronna", LeftToRight: "lewa do prawej", RightToLeft: "prawa do lewej", Custom: "własny" };
+$("#ffsImport").onclick = async () => {
+  let path;
+  try { path = await dialogApi.open({ multiple: false, title: "Wybierz plik FreeFileSync", filters: [{ name: "FreeFileSync", extensions: ["ffs_gui", "ffs_batch"] }] }); }
+  catch (e) { toast(errText(e), "bad"); return; }
+  if (!path) return;
+  let list;
+  try { list = await invoke("import_freefilesync", { path: Array.isArray(path) ? path[0] : path }); }
+  catch (e) { toast(errText(e, "Nie udało się zaimportować pliku FreeFileSync — sprawdź, czy to poprawny plik .ffs_gui lub .ffs_batch."), "bad"); return; }
+  if (!Array.isArray(list) || !list.length) { toast("W pliku nie znaleziono żadnych par folderów do zaimportowania.", "bad"); return; }
+  ffsJobs = list; $("#ffsErr").textContent = ""; $("#ffsSave").disabled = false;
+  $("#ffsList").innerHTML = list.map((j, i) => `<label class="sw" style="margin:6px 0"><input type="checkbox" data-i="${i}" checked><span><b data-nt>${esc(j.name)}</b><small data-nt>${esc(j.left)}  ⇄  ${esc(j.right)}</small><small>Tryb: ${MODE_TXT[j.mode] || esc(j.mode)}</small></span></label>`).join("");
+  $("#ffsDlg").showModal();
+};
+$("#ffsCancel").onclick = () => $("#ffsDlg").close();
+$("#ffsSave").onclick = async () => {
+  const picked = $$("#ffsList input:checked").map((c) => ffsJobs[+c.dataset.i]);
+  if (!picked.length) { $("#ffsErr").textContent = "Zaznacz co najmniej jedno zadanie do zapisania."; return; }
+  $("#ffsSave").disabled = true; $("#ffsErr").textContent = "";
+  let ok = 0; const bad = [];
+  const used = new Set(jobs.map((j) => j.id));
+  for (const j of picked) {
+    // import nigdy nie włącza zadania ani nie przenosi poleceń
+    const id = j.id && !used.has(j.id) ? j.id : newId(); used.add(id);
+    try { await invoke("save_job", { job: { ...j, id, enabled: false, run_before: null, run_after: null } }); ok++; }
+    catch (e) { bad.push(`${j.name}: ${errText(e, "zapis nie powiódł się")}`); }
+  }
+  await refreshJobs(); refreshStatus();
+  if (bad.length) { $("#ffsErr").textContent = bad.join(" · "); $("#ffsSave").disabled = false; if (!ok) return; }
+  else $("#ffsDlg").close();
+  if (ok) toast(`Zaimportowano zadań: ${ok} (wyłączone — włącz je po sprawdzeniu)`, "ok");
+};

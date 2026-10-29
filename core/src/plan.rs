@@ -13,6 +13,86 @@ pub enum Mode {
     LeftToRight,
     RightToLeft,
     TwoWay,
+    /// Tryb „Własny” (jak w FreeFileSync): akcja dla każdej z 5 kategorii wybierana osobno (`CustomRules`).
+    Custom,
+}
+
+/// Jak uznać plik za „taki sam”.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Compare {
+    /// Rozmiar i czas modyfikacji (w tolerancji).
+    #[default]
+    TimeAndSize,
+    /// Tylko rozmiar.
+    SizeOnly,
+    /// Zawartość: BLAKE3 (lokalne) albo hash backendu zdalnego; bez możliwości sprawdzenia: czas i rozmiar.
+    Content,
+}
+
+/// Akcja przypisana kategorii w trybie `Custom`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CustomAction {
+    #[default]
+    Skip,
+    CopyToRight,
+    CopyToLeft,
+    DeleteLeft,
+    DeleteRight,
+}
+
+/// Reguły trybu `Custom`: co zrobić w każdej z 5 kategorii.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CustomRules {
+    /// Plik tylko po lewej.
+    #[serde(default)]
+    pub left_only: CustomAction,
+    /// Plik tylko po prawej.
+    #[serde(default)]
+    pub right_only: CustomAction,
+    /// Oba istnieją, nowszy jest lewy.
+    #[serde(default)]
+    pub left_newer: CustomAction,
+    /// Oba istnieją, nowszy jest prawy.
+    #[serde(default)]
+    pub right_newer: CustomAction,
+    /// Oba istnieją, ten sam czas, inny rozmiar/zawartość.
+    #[serde(default)]
+    pub different: CustomAction,
+}
+
+impl CustomRules {
+    /// Zwraca komunikat po polsku, gdy akcja nie ma sensu dla kategorii (np. kopiowanie z nieistniejącego pliku).
+    pub fn validate(&self) -> Result<(), String> {
+        use CustomAction::*;
+        if matches!(self.left_only, CopyToLeft | DeleteRight) {
+            return Err("Tryb własny: dla plików tylko po lewej dozwolone jest: pomiń, kopiuj w prawo albo usuń lewy.".into());
+        }
+        if matches!(self.right_only, CopyToRight | DeleteLeft) {
+            return Err("Tryb własny: dla plików tylko po prawej dozwolone jest: pomiń, kopiuj w lewo albo usuń prawy.".into());
+        }
+        Ok(())
+    }
+}
+
+/// Parametry porównywania dwóch wersji pliku.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cmp {
+    /// Tolerancja czasu modyfikacji (s).
+    pub tol_secs: u32,
+    /// Różnice o całkowitą liczbę godzin ≤ N (zmiana czasu, strefa) są ignorowane.
+    pub shift_hours: u32,
+    /// Porównuj tylko rozmiar.
+    pub size_only: bool,
+}
+
+impl Default for Cmp {
+    fn default() -> Self {
+        Cmp {
+            tol_secs: 2,
+            shift_hours: 0,
+            size_only: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +113,14 @@ pub struct Options {
     /// Tylko dodawaj nowe pliki: nic nie nadpisuj i nic nie usuwaj.
     pub only_add: bool,
     pub conflict: Conflict,
+}
+
+/// Rozszerzenia planu (0.8): parametry porównywania i reguły trybu `Custom`. Osobno od `Options`, by nie łamać
+/// istniejących wywołań `plan(.., Options { .. })`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanExt {
+    pub cmp: Cmp,
+    pub custom: CustomRules,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,30 +145,49 @@ pub enum Action {
 
 pub type Tree = BTreeMap<String, Meta>;
 
-/// Tolerancja mtime (FAT/SMB zaokrąglają do 2 s).
-const TOL: i64 = 2;
-
-/// Czy dwie wersje pliku uznajemy za identyczne: ten sam rozmiar i mtime w tolerancji.
+/// Czy dwie wersje pliku uznajemy za identyczne (domyślne porównanie: rozmiar + czas w tolerancji 2 s).
 ///
 /// DECYZJA (T5-03): nie czytamy treści. Nowe pliki po obu stronach o tym samym rozmiarze
 /// i czasie (lecz innej treści) są uznane za identyczne - tak samo jak w rsync (domyślnie
-/// „quick check”). Weryfikacja hashem dotyczy kopiowania (opcja `verify`), nie porównania.
+/// „quick check”). Dokładniejsze porównanie to opcja `compare = Content` (silnik), a weryfikacja
+/// hashem przy kopiowaniu to opcja `verify`.
 pub fn same(a: &Meta, b: &Meta) -> bool {
-    a.size == b.size && a.mtime.abs_diff(b.mtime) <= TOL as u64
+    same_c(a, b, &Cmp::default())
+}
+
+/// Jak `same`, ale z parametrami zadania (tolerancja, przesunięcie godzinowe, tylko rozmiar).
+pub fn same_c(a: &Meta, b: &Meta, c: &Cmp) -> bool {
+    if a.size != b.size {
+        return false;
+    }
+    if c.size_only {
+        return true;
+    }
+    let diff = a.mtime.abs_diff(b.mtime);
+    let tol = c.tol_secs as u64;
+    if diff <= tol {
+        return true;
+    }
+    if c.shift_hours == 0 {
+        return false;
+    }
+    // najbliższa całkowita liczba godzin
+    let k = (diff + 1800) / 3600;
+    k >= 1 && k <= c.shift_hours as u64 && diff.abs_diff(k * 3600) <= tol
 }
 
 /// Zmiana względem migawki: nowy, zmieniony lub usunięty.
-fn changed(x: Option<&Meta>, base: Option<&Meta>) -> bool {
+fn changed(x: Option<&Meta>, base: Option<&Meta>, c: &Cmp) -> bool {
     match (x, base) {
         (None, None) => false,
-        (Some(a), Some(b)) => !same(a, b),
+        (Some(a), Some(b)) => !same_c(a, b, c),
         _ => true,
     }
 }
 
 /// Zmiana istniejącego pliku względem migawki (usunięcie nie liczy się).
-fn modified(x: Option<&Meta>, base: Option<&Meta>) -> bool {
-    matches!((x, base), (Some(a), Some(b)) if !same(a, b))
+fn modified(x: Option<&Meta>, base: Option<&Meta>, c: &Cmp) -> bool {
+    matches!((x, base), (Some(a), Some(b)) if !same_c(a, b, c))
 }
 
 fn resolve(l: &Meta, r: &Meta, c: Conflict) -> Action {
@@ -109,6 +216,18 @@ pub fn plan(
     br: &Tree,
     o: Options,
 ) -> BTreeMap<String, Action> {
+    plan_ext(left, right, bl, br, o, PlanExt::default())
+}
+
+/// Jak `plan`, z parametrami porównywania i regułami trybu `Custom`.
+pub fn plan_ext(
+    left: &Tree,
+    right: &Tree,
+    bl: &Tree,
+    br: &Tree,
+    o: Options,
+    x: PlanExt,
+) -> BTreeMap<String, Action> {
     let paths: BTreeSet<&String> = left
         .keys()
         .chain(right.keys())
@@ -118,7 +237,7 @@ pub fn plan(
     let mut out = BTreeMap::new();
     for p in paths {
         let (l, r) = (left.get(p), right.get(p));
-        if let Some(a) = decide(l, r, bl.get(p), br.get(p), &o) {
+        if let Some(a) = decide(l, r, bl.get(p), br.get(p), &o, &x) {
             if o.only_add {
                 let ok = match a {
                     Action::CopyToRight => r.is_none(),
@@ -141,14 +260,17 @@ fn decide(
     bl: Option<&Meta>,
     br: Option<&Meta>,
     o: &Options,
+    x: &PlanExt,
 ) -> Option<Action> {
-    if let (Some(x), Some(y)) = (l, r) {
-        if same(x, y) {
+    if let (Some(l_), Some(r_)) = (l, r) {
+        if same_c(l_, r_, &x.cmp) {
             return None;
         }
     }
-    let (lc, rc) = (changed(l, bl), changed(r, br));
+    let c = &x.cmp;
+    let (lc, rc) = (changed(l, bl, c), changed(r, br, c));
     match o.mode {
+        Mode::Custom => decide_custom(l, r, o, x),
         Mode::LeftToRight => match (l, r) {
             (Some(_), Some(_)) if !lc && !rc => None,
             (Some(_), _) => Some(Action::CopyToRight),
@@ -164,26 +286,54 @@ fn decide(
         Mode::TwoWay => match (l, r) {
             (None, None) => None,
             (Some(_), None) => {
-                if bl.is_none() || modified(l, bl) || o.no_delete_left {
+                if bl.is_none() || modified(l, bl, c) || o.no_delete_left {
                     Some(Action::CopyToRight) // nowy, zmieniony, albo usunięcie nie propaguje się
                 } else {
                     Some(Action::DeleteLeft)
                 }
             }
             (None, Some(_)) => {
-                if br.is_none() || modified(r, br) || o.no_delete_right {
+                if br.is_none() || modified(r, br, c) || o.no_delete_right {
                     Some(Action::CopyToLeft)
                 } else {
                     Some(Action::DeleteRight)
                 }
             }
-            (Some(x), Some(y)) => match (lc, rc) {
+            (Some(a), Some(b)) => match (lc, rc) {
                 (false, false) => None,
                 (true, false) => Some(Action::CopyToRight),
                 (false, true) => Some(Action::CopyToLeft),
-                (true, true) => Some(resolve(x, y, o.conflict)),
+                (true, true) => Some(resolve(a, b, o.conflict)),
             },
         },
+    }
+}
+
+/// Tryb własny: akcja zależy tylko od kategorii pliku (bez migawki). Akcje bez sensu (brak źródła) są pomijane,
+/// a usunięcia respektują `no_delete_*`.
+fn decide_custom(l: Option<&Meta>, r: Option<&Meta>, o: &Options, x: &PlanExt) -> Option<Action> {
+    let rule = match (l, r) {
+        (None, None) => return None,
+        (Some(_), None) => x.custom.left_only,
+        (None, Some(_)) => x.custom.right_only,
+        (Some(a), Some(b)) => {
+            // pliki nie są „takie same” (sprawdzone wyżej): decyduje czas, a przy równym czasie - różnica rozmiaru/treści
+            if a.mtime.abs_diff(b.mtime) <= x.cmp.tol_secs as u64 {
+                x.custom.different
+            } else if a.mtime > b.mtime {
+                x.custom.left_newer
+            } else {
+                x.custom.right_newer
+            }
+        }
+    };
+    match rule {
+        CustomAction::Skip => None,
+        CustomAction::CopyToRight if l.is_some() => Some(Action::CopyToRight),
+        CustomAction::CopyToLeft if r.is_some() => Some(Action::CopyToLeft),
+        CustomAction::DeleteLeft if l.is_some() && !o.no_delete_left => Some(Action::DeleteLeft),
+        CustomAction::DeleteRight if r.is_some() && !o.no_delete_right => Some(Action::DeleteRight),
+        _ => None,
     }
 }
 

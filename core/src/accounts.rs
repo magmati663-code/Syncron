@@ -121,7 +121,10 @@ fn valid_kind(k: &str) -> bool {
 
 /// Czy parametr jest sekretem: według specyfikacji formularza rodzaju, a gdy jej brak — po nazwie.
 pub fn is_secret_param(kind: &str, key: &str) -> bool {
-    if let Some(ks) = remote::spec::kinds().into_iter().find(|k| k.kind == kind) {
+    if let Some(ks) = remote::spec::remote_kinds()
+        .into_iter()
+        .find(|k| k.kind == kind)
+    {
         if let Some(f) = ks.fields.iter().find(|f| f.key == key) {
             return f.secret;
         }
@@ -788,7 +791,7 @@ impl Store {
         if !valid_kind(kind) {
             return Err(format!("Nieobsługiwany rodzaj konta: „{kind}”."));
         }
-        let kinds = remote::spec::kinds();
+        let kinds = remote::spec::remote_kinds();
         if !kinds.is_empty() && kind != "mem" && !kinds.iter().any(|k| k.kind == kind) {
             return Err(format!("Nieobsługiwany rodzaj konta: „{kind}”."));
         }
@@ -1174,7 +1177,7 @@ impl Store {
                     put(&mut public, "provider", "provider");
                     put(&mut public, "region", "region");
                     put(&mut public, "endpoint", "endpoint");
-                    put(&mut public, "access_key_id", "access_key_id");
+                    put(&mut secret, "access_key_id", "access_key_id");
                     // w rclone klucz tajny S3 jest zapisany jawnie (nie „obscure”)
                     put(&mut secret, "secret_access_key", "secret_access_key");
                     "s3"

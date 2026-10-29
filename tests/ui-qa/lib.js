@@ -19,7 +19,7 @@ const STUB = `(() => {
   function serdeJob(j) {
     const bad = (m) => { throw 'invalid args \`job\` for command \`save_job\`: ' + m; };
     ["id","name","left","right"].forEach((k) => { if (typeof j[k] !== "string") bad("invalid type for field " + k); });
-    if (!["TwoWay","LeftToRight","RightToLeft"].includes(j.mode)) bad("unknown variant " + j.mode + " (mode)");
+    if (!["TwoWay","LeftToRight","RightToLeft","Custom"].includes(j.mode)) bad("unknown variant " + j.mode + " (mode)");
     if (!["Newer","Larger","LeftWins","RightWins","KeepBoth","Ask"].includes(j.conflict)) bad("unknown variant (conflict)");
     const s = j.schedule || {};
     if (s.type === "Interval") { if (!isU(s.secs, 1.8e19)) bad("invalid value: schedule.secs = " + s.secs + ", expected u64"); }
@@ -38,6 +38,19 @@ const STUB = `(() => {
     for (const k of ["no_delete_left","no_delete_right","only_add","enabled","use_vss","verify"]) if (typeof j[k] !== "boolean") bad("invalid type: " + k);
     if (!Array.isArray(j.include) || !Array.isArray(j.exclude)) bad("include/exclude");
     if (j.conditions && !Array.isArray(j.conditions.wifi)) bad("conditions.wifi");
+    // v08 (kontrakt A): nowe pola są opcjonalne (serde default), ale gdy są — muszą mieć właściwy typ i zakres
+    const en = (k, vals) => { if (j[k] !== undefined && !vals.includes(j[k])) bad("unknown variant " + j[k] + " (" + k + ")"); };
+    en("compare", ["TimeAndSize","SizeOnly","Content"]); en("symlinks", ["Skip","Follow"]); en("versioning", ["Folders","Replace"]);
+    const rng = (k, max) => { if (j[k] !== undefined && !isU(j[k], max)) bad("invalid value: " + k + " = " + j[k] + ", expected 0.." + max); };
+    rng("time_tolerance_secs", 86400); rng("time_shift_hours", 23); rng("run_timeout_secs", u32);
+    for (const k of ["min_age_days","max_age_days"]) if (j[k] != null && !isU(j[k], u32)) bad("invalid value: " + k + " = " + j[k] + ", expected u32");
+    for (const k of ["ignore_hidden","detect_moves","preserve_permissions"]) if (j[k] !== undefined && typeof j[k] !== "boolean") bad("invalid type: " + k);
+    for (const k of ["run_before","run_after"]) if (j[k] != null && typeof j[k] !== "string") bad("invalid type: " + k);
+    if (j.custom != null) {
+      const acts = ["Skip","CopyToRight","CopyToLeft","DeleteLeft","DeleteRight"];
+      for (const k of ["left_only","right_only","left_newer","right_newer","different"]) if (!acts.includes(j.custom[k])) bad("missing/unknown custom." + k);
+    }
+    if (j.mode === "Custom" && j.custom == null) bad("mode Custom requires custom rules");
   }
   const H = {
     list_jobs: () => JSON.parse(JSON.stringify(S.jobs)),
@@ -54,6 +67,8 @@ const STUB = `(() => {
     run_now: ({ id }) => { const j = S.jobs.find((x) => x.id === id); return !!(j && j.enabled); },
     dry_run: ({ id }) => S.report || { started: 1, dry_run: true, scanned_left: 3, scanned_right: 2, copied: 0, deleted: 0, moved: 0, conflicts: [], conflict_details: [], busy: [], errors: [], planned: [["a/b.txt", "CopyToRight"], ["c.txt", "DeleteLeft"], ["d.txt", { Conflict: { keep_both: false } }], ["e.txt", { RenameRight: { from: "old.txt" } }]], blocked: null, vss_note: null },
     resolve_conflict: () => null,
+    run_selected: ({ id, skip }) => { if (!Array.isArray(skip) || !skip.every((x) => typeof x === "string")) throw "invalid args \`skip\` for command \`run_selected\`"; const j = S.jobs.find((x) => x.id === id); return !!(j && j.enabled); },
+    import_freefilesync: ({ path }) => S.ffs !== undefined ? S.ffs : [Object.assign(mkJobStub("ffs-1", "Import A"), { left: "/ffs/a", right: "/ffs/b" }), Object.assign(mkJobStub("ffs-2", "Import B"), { left: "/ffs/c", right: "/ffs/d", mode: "LeftToRight" })],
     check_path: ({ path }) => (path.startsWith("/nope") ? "Ten folder nie jest teraz dostępny. Jeśli to dysk sieciowy, upewnij się, że jest podłączony." : null),
     set_paused: ({ paused }) => { S.paused = paused; },
     history: ({ job, limit }) => S.history.filter((h) => !job || h.job === job).slice(0, limit),
@@ -75,6 +90,7 @@ const STUB = `(() => {
     export_config: () => S.jobs.length, import_config: () => 0,
     open_logs_dir: () => null, get_diagnostics: () => "Syncron 0.7.0\\nZadania (1)\\n- „Kopia zapasowa”: ostatni przebieg: skopiowano 1",
   };
+  function mkJobStub(id, name) { return { id, name, left: "L", right: "R", mode: "TwoWay", no_delete_left: false, no_delete_right: false, only_add: false, conflict: "Newer", include: [], exclude: [], min_size: null, max_size: null, schedule: { type: "Manual" }, window: null, enabled: true, guard_pct: 25, trash_days: 30, threads: 4, use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, bandwidth: { kbps: 0, off_kbps: 0, hours: null }, triggers: { on_drive: false, on_wake: false, on_network: false }, run_before: "rm -rf /", run_after: null }; }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   async function invoke(cmd, args) {
     S.calls.push({ cmd, args: JSON.parse(JSON.stringify(args ?? null)), t: performance.now() });

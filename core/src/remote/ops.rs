@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
-type Scan = (Vec<(String, Meta)>, Vec<String>);
+type Hashes = std::collections::BTreeMap<String, Vec<(String, String)>>;
+type Scan = (Vec<(String, Meta)>, Vec<String>, Hashes);
 
 /// Błąd backendu -> błąd operacji: `Busy` zostaje `Busy` (ponowienie później), reszta to opis po polsku.
 pub fn op_err(account: &str, e: RError) -> OpError {
@@ -61,13 +62,14 @@ fn is_special(path: &str) -> bool {
 }
 
 /// Lista plików konta pod korzeniem. Błąd listowania = `Err` (silnik przerywa przebieg bez usuwania).
-pub fn list(account: &str, root: &str) -> Result<Scan, String> {
+pub fn list(account: &str, root: &str, want_hashes: bool) -> Result<Scan, String> {
     let b = accounts::open_backend(account, root)?;
     let entries = b
         .list_files("")
         .map_err(|e| accounts::map_account_err(account, &e))?;
     let mut out = Vec::with_capacity(entries.len());
     let mut skipped = Vec::new();
+    let mut hashes = Hashes::new();
     for e in entries {
         // ścieżki z serwera to dane z zewnątrz: `..`, bezwzględne (wiodący `/`), puste komponenty i znaki sterujące odrzucamy
         let p = e.path;
@@ -80,6 +82,14 @@ pub fn list(account: &str, root: &str) -> Result<Scan, String> {
         if is_special(&p) {
             continue;
         }
+        if want_hashes {
+            if let Some(h) = &e.meta.hash {
+                hashes.insert(
+                    p.clone(),
+                    vec![(h.algo.to_lowercase(), h.hex.to_lowercase())],
+                );
+            }
+        }
         out.push((
             p,
             Meta {
@@ -88,7 +98,7 @@ pub fn list(account: &str, root: &str) -> Result<Scan, String> {
             },
         ));
     }
-    Ok((out, skipped))
+    Ok((out, skipped, hashes))
 }
 
 /// Metadane pliku: `Ok(None)` = nie istnieje, `Err` = nie wiadomo (błąd sieci/logowania).
@@ -136,7 +146,7 @@ fn digest_file<D: Digest>(p: &Path) -> std::io::Result<String> {
 }
 
 /// Skrót pliku lokalnego w algorytmie serwera; `None` dla algorytmów, których nie liczymy lokalnie.
-fn local_digest(p: &Path, algo: &str) -> std::io::Result<Option<String>> {
+pub(crate) fn local_digest(p: &Path, algo: &str) -> std::io::Result<Option<String>> {
     Ok(match algo.to_ascii_lowercase().as_str() {
         "md5" => Some(digest_file::<md5::Md5>(p)?),
         "sha1" | "sha-1" => Some(digest_file::<sha1::Sha1>(p)?),
@@ -443,12 +453,13 @@ pub fn backup(
     rel: &str,
     stamp: &str,
     base: &str,
-) -> Result<(), OpError> {
+) -> Result<String, OpError> {
     rel_ok(rel)?;
     let b = be(account, root)?;
     let to = free_trash_path(b.as_ref(), account, stamp, rel, base)?;
     let bw = Bandwidth::default();
-    retry(|| b.copy(rel, &to, &Xfer::new(&bw))).map_err(|e| op_err(account, e))
+    retry(|| b.copy(rel, &to, &Xfer::new(&bw))).map_err(|e| op_err(account, e))?;
+    Ok(to)
 }
 
 /// Usuwa plik (`stamp` pusty) albo przenosi go do kosza: przeniesienie po stronie serwera, a gdy się nie da —
@@ -459,13 +470,13 @@ pub fn remove(
     rel: &str,
     stamp: &str,
     base: &str,
-) -> Result<(), OpError> {
+) -> Result<String, OpError> {
     rel_ok(rel)?;
     let b = be(account, root)?;
     if stamp.is_empty() {
         retry(|| b.delete(rel)).map_err(|e| op_err(account, e))?;
         prune_parents(b.as_ref(), rel);
-        return Ok(());
+        return Ok(String::new());
     }
     let to = free_trash_path(b.as_ref(), account, stamp, rel, base)?;
     match retry(|| b.rename(rel, &to)) {
@@ -479,7 +490,7 @@ pub fn remove(
         }
     }
     prune_parents(b.as_ref(), rel);
-    Ok(())
+    Ok(to)
 }
 
 /// Elementy kosza: (znacznik, ścieżka, rozmiar).

@@ -54,7 +54,7 @@ Plik `.syncignore` w głównym folderze któregokolwiek boku (jedna maska na lin
 
 ## Konta zdalne (własna warstwa, bez programów zewnętrznych)
 Syncron łączy się z serwerami wyłącznie własnym kodem (`core/src/remote/`): WebDAV (Nextcloud, ownCloud, Bitrix24...), FTP/FTPS,
-SFTP, S3 oraz Google Drive, OneDrive i Dropbox. Konta dodajesz w zakładce „Konta”, a potem wybierasz je jako lokalizację
+SFTP i S3 (udziały SMB: ścieżka sieciowa `\\serwer\udział` lub zamontowany folder). W kreatorze przycisk „Przeglądaj…” otwiera drzewo folderów konta. Konta dodajesz w zakładce „Konta”, a potem wybierasz je jako lokalizację
 (`konto:Folder`, np. `nextcloud:Dokumenty`).
 
 - Dane kont (host, użytkownik...) leżą w `accounts.json` w folderze danych. **Hasła i tokeny nigdy nie trafiają do tego pliku**:
@@ -63,7 +63,7 @@ SFTP, S3 oraz Google Drive, OneDrive i Dropbox. Konta dodajesz w zakładce „Ko
   (uprawnienia 0600). Zmienna `SYNCRON_SECRETS=file` wymusza plik.
 - Usunięcie konta usuwa także jego sekrety. Uszkodzony `secrets.enc` jest odkładany jako `*.corrupt-*`, a konta pokazują „wymaga zalogowania”.
 - **Migracja z rclone:** jeśli w folderze danych jest stary `rclone.conf`, aplikacja proponuje import (`syncron accounts import-rclone [plik]`).
-  Konta WebDAV/FTP/SFTP/S3 przenoszą się razem z hasłami; konta Google Drive/OneDrive/Dropbox trzeba zalogować ponownie.
+  Konta WebDAV/FTP/SFTP/S3 przenoszą się razem z hasłami; konta Google Drive/OneDrive/Dropbox/crypt są w raporcie jako „nieobsługiwane w tej wersji”.
 - CLI: `syncron accounts list|test <nazwa>|delete <nazwa>`.
 
 ## Rozwój
