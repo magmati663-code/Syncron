@@ -27,7 +27,6 @@ const init = `
     dry_run: () => rep,
     vss_status: () => ({ supported: true, admin: false, elevated_autostart: false }),
     get_settings: () => ({ notify: true, language: "pl", unavailable_minutes: 30 }),
-    rclone_version: () => XSS("ver"),
     get_diagnostics: () => XSS("diag"),
     check_path: () => XSS("hint"),
   };
