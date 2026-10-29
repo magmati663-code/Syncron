@@ -127,9 +127,14 @@ impl<'a> Parser<'a> {
                 self.i += e + 3;
             } else if r.starts_with("<!DOCTYPE") || r.starts_with("<!doctype") {
                 // DTD (encje zewnętrzne) ignorujemy w całości
-                let e = r
-                    .find('>')
-                    .ok_or("Nieprawidłowy XML: niezamknięty DOCTYPE.")?;
+                let head = r.find('>').unwrap_or(r.len());
+                let e = if r[..head].contains('[') {
+                    // wewnętrzny podzbiór DTD: do „]>”
+                    r.find("]>").map(|x| x + 1)
+                } else {
+                    r.find('>')
+                }
+                .ok_or("Nieprawidłowy XML: niezamknięty DOCTYPE.")?;
                 self.i += e + 1;
             } else {
                 return Ok(());
