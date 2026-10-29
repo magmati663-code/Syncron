@@ -131,7 +131,7 @@ pub struct Triggers {
 pub struct Job {
     pub id: String,
     pub name: String,
-    /// Ścieżka lokalna/UNC albo `remote:ścieżka` (rclone: Google Drive, OneDrive, Bitrix24 WebDAV...).
+    /// Ścieżka lokalna/UNC albo `konto:ścieżka` (konto zdalne: WebDAV, FTP, SFTP, S3, Google Drive, OneDrive, Dropbox...).
     pub left: String,
     pub right: String,
     pub mode: Mode,
@@ -181,7 +181,7 @@ pub struct Job {
     pub triggers: Triggers,
 }
 
-/// Znormalizowana lokalizacja do porównań: (nazwa konta rclone lub None, prefiks, komponenty).
+/// Znormalizowana lokalizacja do porównań: (nazwa konta zdalnego lub None, prefiks, komponenty).
 type Norm = (Option<String>, String, Vec<String>);
 
 /// Normalizacja leksykalna (bez dotykania dysku): separatory, końcowe `/`, `.`/`..`, wielkość liter (Windows/macOS).
@@ -190,8 +190,11 @@ fn normalize_location(s: &str, ci: bool) -> Norm {
     let fold = |x: &str| if ci { x.to_lowercase() } else { x.to_string() };
     let s = s.trim();
     match Location::parse(s) {
-        Location::Rclone(full) => {
-            let (name, rest) = full.split_once(':').unwrap_or((&full, ""));
+        Location::Remote {
+            account: name,
+            root: rest,
+        } => {
+            let rest = rest.as_str();
             let mut c: Vec<String> = Vec::new();
             for part in rest.split('/') {
                 match part {

@@ -190,15 +190,9 @@ struct Ctx<'a> {
     o: &'a Opts,
 }
 
-/// Skrót BLAKE3 pliku lokalnego (strumieniowo); None dla rclone lub gdy nie da się odczytać.
+/// Odcisk treści do wykrywania przeniesień (patrz `Location::content_hash`): None, gdy nie da się ustalić.
 fn local_hash(loc: &Location, rel: &str) -> Option<[u8; 32]> {
-    let Location::Local(p) = loc else {
-        return None;
-    };
-    let mut f = std::fs::File::open(crate::location::local_full(p, rel)).ok()?;
-    let mut h = blake3::Hasher::new();
-    std::io::copy(&mut f, &mut h).ok()?;
-    Some(*h.finalize().as_bytes())
+    loc.content_hash(rel)
 }
 
 /// Jedna strona synchronizacji: lokalizacja i jej wpisy ze skanu.
@@ -210,7 +204,7 @@ struct Side<'a> {
 /// Para „usunięty plik + nowy plik o tym samym rozmiarze i czasie” to przeniesienie: po stronie docelowej
 /// wystarczy zmienić ścieżkę zamiast kopiować od nowa. Samo dopasowanie rozmiaru i czasu nie wystarcza
 /// (rozpakowane archiwum zachowuje czasy): przeniesienie wykonujemy tylko, gdy treść się zgadza
-/// (hash BLAKE3, gdy obie strony są lokalne). Dla rclone nie zgadujemy: zwykłe kopiowanie + usunięcie.
+/// (hash BLAKE3, gdy obie strony są lokalne). Dla zdalnych: tylko gdy oba końce podają ten sam skrót i rozmiar; inaczej kopiowanie + usunięcie.
 /// Dopasowanie jest n log n: kandydaci posortowani wg (rozmiar, mtime), zakresy przez bisekcję.
 fn detect_moves(
     actions: &mut BTreeMap<String, Action>,
@@ -268,7 +262,7 @@ fn detect_moves(
             let (Some(se), Some(de)) = (src.entries.get(nk), dst.entries.get(ok)) else {
                 continue;
             };
-            // treść musi się zgadzać; bez możliwości sprawdzenia (rclone) nie zgadujemy
+            // treść musi się zgadzać; bez możliwości sprawdzenia nie zgadujemy
             match (local_hash(src.loc, &se.real), local_hash(dst.loc, &de.real)) {
                 (Some(a), Some(b)) if a == b => moves.push((nk.clone(), ok.clone())),
                 _ => {}
@@ -359,13 +353,18 @@ fn copy_one(
 }
 
 /// Weryfikacja przed usunięciem: plik „zniknął” po stronie `other`, ale mógł tylko wypaść ze skanu
-/// (reguła rozmiaru/maski, symlink, błędny rozmiar z rclone). Sprawdzamy go bezpośrednio, bez filtrów.
+/// (reguła rozmiaru/maski, symlink, błędny rozmiar ze zdalnego listingu). Sprawdzamy go bezpośrednio, bez filtrów.
 fn survives(other: &Location, real: &str, side: &str) -> Option<String> {
-    other.stat(real).map(|_| {
-        format!(
+    match other.stat_checked(real) {
+        Ok(None) => None,
+        Ok(Some(_)) => Some(format!(
             "ostrzeżenie: {real}: plik nadal istnieje po stronie {side}, choć nie został wykryty przy skanowaniu (reguły, dowiązanie lub błąd listowania) - pominięto usunięcie"
-        )
-    })
+        )),
+        // nie wiadomo, czy plik istnieje (błąd sieci/logowania): nie usuwamy
+        Err(e) => Some(format!(
+            "ostrzeżenie: {real}: nie można sprawdzić pliku po stronie {side} ({e}) - pominięto usunięcie"
+        )),
+    }
 }
 
 fn exec(key: &str, a: &Action, c: &Ctx) -> Out {

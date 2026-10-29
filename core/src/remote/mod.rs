@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 pub mod http;
 pub mod mem;
+pub mod ops;
 pub mod spec;
 
 /// Skrót zawartości podawany przez serwer (jeśli go ma): pozwala porównać pliki bez pobierania.
@@ -107,6 +108,8 @@ impl<'a> Xfer<'a> {
 pub trait Backend: Send + Sync {
     fn kind(&self) -> &'static str;
     /// Rekurencyjna lista PLIKÓW pod `dir` ("" = korzeń). Brak folderu = pusta lista. Błąd = `Err`.
+    /// Zwracane `path` są ZAWSZE względem korzenia backendu (a nie względem `dir`), np. dla `dir` = `.syncron-trash`
+    /// wpis ma ścieżkę `.syncron-trash/2026-01-01_120000/a.txt`.
     fn list_files(&self, dir: &str) -> RResult<Vec<REntry>>;
     /// Jeden poziom folderu (do przeglądarki): foldery i pliki.
     fn list_dir(&self, dir: &str) -> RResult<Vec<DirItem>>;
@@ -120,6 +123,11 @@ pub trait Backend: Send + Sync {
     fn delete(&self, path: &str) -> RResult<()>;
     /// Przenosi/zmienia nazwę po stronie serwera (tworzy foldery nadrzędne, zastępuje cel).
     fn rename(&self, from: &str, to: &str) -> RResult<()>;
+    /// Kopiuje plik po stronie serwera (np. kopia zapasowa do kosza przed nadpisaniem). Domyślnie: pobranie do pliku
+    /// tymczasowego i wysłanie; backendy z kopiowaniem serwerowym (Drive, S3, WebDAV COPY...) nadpisują tę metodę.
+    fn copy(&self, from: &str, to: &str, x: &Xfer) -> RResult<()> {
+        copy_via_temp(self, from, to, x)
+    }
     /// Tworzy folder wraz z nadrzędnymi.
     fn mkdirs(&self, dir: &str) -> RResult<()>;
     /// Usuwa pusty folder (sprzątanie po usunięciu plików); niepusty/nieistniejący = `Ok`.
@@ -133,6 +141,21 @@ pub trait Backend: Send + Sync {
     fn ping(&self) -> RResult<String> {
         self.list_dir("").map(|_| "OK".to_string())
     }
+}
+
+/// Kopiowanie przez plik tymczasowy (domyślna implementacja `Backend::copy`).
+pub fn copy_via_temp<B: Backend + ?Sized>(b: &B, from: &str, to: &str, x: &Xfer) -> RResult<()> {
+    let meta = b
+        .stat(from)?
+        .ok_or_else(|| RError::NotFound(from.to_string()))?;
+    let dir = crate::vss::scratch_dir().map_err(|e| RError::Failed(e.to_string()))?;
+    let tmp = dir.join("kopia");
+    let res = b
+        .download(from, &tmp, x)
+        .and_then(|_| b.upload(&tmp, to, meta.meta.mtime, x));
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_dir(&dir);
+    res
 }
 
 /// Odbiornik odświeżonych sekretów (nazwa, wartość).
