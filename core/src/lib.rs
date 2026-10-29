@@ -6,6 +6,7 @@ pub mod location;
 pub mod model;
 pub mod names;
 pub mod plan;
+pub mod remote;
 pub mod rules;
 pub mod runner;
 pub mod vss;

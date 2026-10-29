@@ -520,6 +520,38 @@ async fn delete_remote(name: String) -> Res<()> {
 }
 
 #[tauri::command]
+fn remote_kinds() -> Vec<syncron_core::remote::spec::KindSpec> {
+    syncron_core::remote::spec::remote_kinds()
+}
+
+#[derive(Serialize)]
+struct RemoteDirEntry {
+    name: String,
+    is_dir: bool,
+}
+
+#[derive(Serialize)]
+struct RemoteAbout {
+    total: Option<u64>,
+    used: Option<u64>,
+    free: Option<u64>,
+}
+
+/// TODO(integracja): podłączyć natywny backend zdalny (przeglądanie jednego poziomu folderów).
+#[tauri::command]
+async fn browse_remote(name: String, path: String) -> Res<Vec<RemoteDirEntry>> {
+    let _ = (name, path);
+    Err("Przeglądanie folderów zdalnych: niezaimplementowane.".to_string())
+}
+
+/// TODO(integracja): podłączyć natywny backend zdalny (informacja o miejscu).
+#[tauri::command]
+async fn remote_about(name: String) -> Res<RemoteAbout> {
+    let _ = name;
+    Err("Informacja o miejscu na koncie: niezaimplementowane.".to_string())
+}
+
+#[tauri::command]
 async fn test_remote(name: String) -> Res<String> {
     tauri::async_runtime::spawn_blocking(move || {
         check_remote_name(&name)?;
@@ -1053,6 +1085,9 @@ fn main() {
             add_remote,
             delete_remote,
             test_remote,
+            remote_kinds,
+            browse_remote,
+            remote_about,
             rclone_version,
             vss_status,
             get_settings,

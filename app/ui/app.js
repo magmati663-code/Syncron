@@ -559,37 +559,54 @@ $("#exportCsv").onclick = () => {
 };
 
 // ---------- konta ----------
-const PROVIDERS = [
-  { id: "drive", name: "Google Drive", info: "Logowanie w przeglądarce", color: "#4285f4", mark: "G", kind: "drive", suggest: "gdrive", fields: [] },
-  { id: "onedrive", name: "OneDrive / SharePoint", info: "Logowanie w przeglądarce", color: "#0078d4", mark: "O", kind: "onedrive", suggest: "onedrive", fields: [] },
-  { id: "bitrix", name: "Bitrix24 Dysk", info: "WebDAV: adres, login, hasło", color: "#2fc6f6", mark: "B", kind: "webdav", suggest: "bitrix", extra: { vendor: "other" },
-    fields: [["url", "Adres WebDAV (Bitrix24 → Dysk → „Połącz dysk sieciowy”)", "https://firma.bitrix24.pl/company/personal/user/1/disk/path/"], ["user", "Login"], ["pass", "Hasło lub hasło aplikacji", "", "password"]] },
-  { id: "webdav", name: "WebDAV / Nextcloud", info: "Adres, login, hasło", color: "#64748b", mark: "W", kind: "webdav", suggest: "webdav", extra: { vendor: "other" }, fields: [["url", "Adres WebDAV"], ["user", "Login"], ["pass", "Hasło", "", "password"]] },
-  { id: "crypt", name: "Szyfrowanie (crypt)", info: "Szyfruje pliki przed wysłaniem", color: "#7c3aed", mark: "🔒", kind: "crypt", suggest: "szyfr", extra: { filename_encryption: "standard", directory_name_encryption: "true" },
-    warn: "Zapisz hasła w bezpiecznym miejscu — bez nich zaszyfrowanych danych nie da się odzyskać. Konto-źródło musi już istnieć (np. gdrive:Szyfrowane).",
-    fields: [["remote", "Konto i folder, w którym trafią zaszyfrowane pliki", "gdrive:Szyfrowane"], ["password", "Hasło szyfrowania", "", "password"], ["password2", "Dodatkowe hasło (sól, zalecane)", "", "password"]] },
-  { id: "sftp", name: "SFTP", info: "Serwer, login, hasło", color: "#16a34a", mark: "S", kind: "sftp", suggest: "sftp", fields: [["host", "Serwer"], ["user", "Login"], ["pass", "Hasło", "", "password"], ["port", "Port", "22"]] },
-];
-let prov = null;
-$("#providers").innerHTML = PROVIDERS.map((p) => `<button class="prov" data-p="${p.id}"><span class="pi" style="background:${p.color}">${p.mark}</span><b>${esc(p.name)}</b><span class="muted" style="font-weight:500;font-size:12px">${esc(p.info)}</span></button>`).join("");
+const KIND_LOOK = { gdrive: ["#4285f4", "G"], drive: ["#4285f4", "G"], onedrive: ["#0078d4", "O"], dropbox: ["#0061ff", "D"], webdav: ["#64748b", "W"], sftp: ["#16a34a", "S"], ftp: ["#ea580c", "F"], ftps: ["#c2410c", "F"], s3: ["#f59e0b", "S3"] };
+let kinds = [], curKind = null;
+async function loadKinds() {
+  try { kinds = await invoke("remote_kinds"); } catch (e) { kinds = []; $("#providers").innerHTML = `<span class="err" data-nt>${esc(errText(e, "Nie udało się wczytać listy usług."))}</span>`; return; }
+  $("#providers").innerHTML = kinds.map((p) => { const [c, m] = KIND_LOOK[p.kind] || ["#64748b", p.label.slice(0, 1)]; return `<button class="prov" data-p="${esc(p.kind)}"><span class="pi" style="background:${c}">${esc(m)}</span><b data-nt>${esc(p.label)}</b><span class="muted" style="font-weight:500;font-size:12px">${esc(p.oauth ? "Logowanie w przeglądarce" : p.help)}</span></button>`; }).join("");
+}
+function fieldHtml(f) {
+  const id = "rf_" + f.key, req = f.required ? '<b aria-hidden="true"> *</b>' : "", help = f.help ? `<span class="muted" style="font-weight:400;font-size:12px;display:block">${esc(f.help)}</span>` : "";
+  if (f.kind === "bool") return `<label style="flex-direction:row;display:flex;gap:8px;align-items:center"><input type="checkbox" id="${id}" data-f="${esc(f.key)}" data-ty="bool" ${f.default === "true" ? "checked" : ""}><span>${esc(f.label)}</span></label>${f.warn ? `<div class="msg warn" role="alert" id="${id}_w" hidden>${esc(f.warn)}</div>` : ""}${help}`;
+  if (f.kind === "select") return `<label>${esc(f.label)}${req}<select id="${id}" data-f="${esc(f.key)}" data-ty="select">${f.options.map((o) => `<option value="${esc(o.value)}" ${o.value === f.default ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>${help}</label>`;
+  if (f.kind === "password") return `<label>${esc(f.label)}${req}<span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="password" type="password" autocomplete="new-password" style="flex:1"><button type="button" class="sm ghost" data-eye="${id}" aria-label="Pokaż hasło" aria-pressed="false">Pokaż</button></span>${help}</label>`;
+  if (f.kind === "file" || f.kind === "folder") return `<label>${esc(f.label)}${req}<span class="pick" style="display:flex;gap:6px"><input id="${id}" data-f="${esc(f.key)}" data-ty="text" style="flex:1"><button type="button" class="sm" data-file="${id}" data-dir="${f.kind === "folder" ? 1 : 0}">Wybierz…</button></span>${help}</label>`;
+  const num = f.kind === "number" ? ` type="number" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""}` : ' type="text"';
+  return `<label>${esc(f.label)}${req}<input id="${id}" data-f="${esc(f.key)}" data-ty="${esc(f.kind)}"${num} value="${esc(f.default && f.kind === "number" ? f.default : "")}" placeholder="${esc(f.kind === "text" && f.default ? f.default : "")}">${help}</label>`;
+}
 $("#providers").addEventListener("click", (e) => {
   const b = e.target.closest("[data-p]"); if (!b) return;
-  prov = PROVIDERS.find((p) => p.id === b.dataset.p);
+  curKind = kinds.find((p) => p.kind === b.dataset.p); if (!curKind) return;
   $$(".prov").forEach((x) => x.classList.toggle("sel", x === b));
-  $("#rForm").hidden = false; $("#rName").value = prov.suggest; $("#rMsg").textContent = "";
-  $("#rFields").innerHTML = (prov.warn ? `<div class="msg warn">${esc(prov.warn)}</div>` : "") + prov.fields.map(([k, l, ph, ty]) => `<label>${esc(l)}<input data-f="${k}" type="${ty || "text"}" placeholder="${esc(ph || "")}"></label>`).join("") ||
-    '<p class="muted">Po kliknięciu „Połącz konto” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>';
+  $("#rForm").hidden = false; $("#rName").value = curKind.kind; $("#rMsg").textContent = "";
+  $("#rAdd").textContent = curKind.oauth ? "Zaloguj przez przeglądarkę" : "Połącz konto";
+  $("#rFields").innerHTML = (curKind.oauth ? '<p class="muted">Po kliknięciu „Zaloguj przez przeglądarkę” otworzy się przeglądarka z logowaniem — dokończ je tam.</p>' : "") + curKind.fields.map(fieldHtml).join("");
 });
+$("#rFields").addEventListener("click", async (e) => {
+  const eye = e.target.closest("[data-eye]"), fb = e.target.closest("[data-file]");
+  if (eye) { const i = $("#" + eye.dataset.eye), show = i.type === "password"; i.type = show ? "text" : "password"; eye.textContent = show ? "Ukryj" : "Pokaż"; eye.setAttribute("aria-pressed", show); }
+  if (fb) { try { const p = await dialogApi.open({ directory: fb.dataset.dir === "1", multiple: false }); if (p) $("#" + fb.dataset.file).value = p; } catch (err) { toast(errText(err), "bad"); } }
+});
+$("#rFields").addEventListener("change", (e) => { const w = $("#" + e.target.id + "_w"); if (w && e.target.type === "checkbox") w.hidden = !e.target.checked; });
+function collectRemote() {
+  const params = {};
+  $$("#rFields [data-f]").forEach((i) => {
+    const ty = i.dataset.ty;
+    if (ty === "bool") params[i.dataset.f] = i.checked ? "true" : "false";
+    else if (ty === "password") params[i.dataset.f] = i.value; // hasła bez przycinania
+    else params[i.dataset.f] = i.value.trim();
+  });
+  return params;
+}
 $("#rAdd").onclick = async () => {
-  if ($("#rAdd").disabled) return;
-  const params = { ...(prov.extra || {}) };
-  // hasła wysyłamy bez zmian (spacje mogą być częścią hasła); pozostałe pola przycinamy
-  $$("#rFields input").forEach((i) => (params[i.dataset.f] = i.type === "password" ? i.value : i.value.trim()));
-  const name = $("#rName").value.trim();
+  if ($("#rAdd").disabled || !curKind) return;
+  const name = $("#rName").value.trim(), params = collectRemote();
+  for (const f of curKind.fields) if (f.required && !params[f.key]) { $("#rMsg").textContent = `Uzupełnij pole „${f.label}”.`; return; }
+  for (const f of curKind.fields) if (f.kind === "number" && params[f.key] !== "") { const n = Number(params[f.key]); if (!Number.isInteger(n) || (f.min != null && n < f.min) || (f.max != null && n > f.max)) { $("#rMsg").textContent = `Pole „${f.label}” poza zakresem (${f.min ?? ""}–${f.max ?? ""}).`; return; } }
   if (remotes.some((r) => r.name === name) && !(await ask("Nadpisać istniejące konto?", `Konto „${name}” już istnieje. Dodanie konta pod tą samą nazwą nadpisze jego konfigurację. Aby tego uniknąć, zmień nazwę.`, "Nadpisz", true))) return;
-  $("#rMsg").textContent = "Łączenie… (dokończ logowanie w przeglądarce, jeśli się otworzyła)"; $("#rAdd").disabled = true;
-  try { await invoke("add_remote", { name, kind: prov.kind, params }); $("#rMsg").textContent = ""; $("#rForm").hidden = true; toast("Konto dodane", "ok"); await loadRemotes(); }
-  catch (e) { $("#rMsg").textContent = "Błąd: " + e; }
+  $("#rMsg").textContent = curKind.oauth ? "Czekam na logowanie w przeglądarce…" : "Łączenie…"; $("#rAdd").disabled = true;
+  try { await invoke("add_remote", { name, kind: curKind.kind, params }); $("#rMsg").textContent = ""; $("#rForm").hidden = true; toast("Konto dodane", "ok"); await loadRemotes(); }
+  catch (e) { $("#rMsg").textContent = "Błąd: " + errText(e); }
   $("#rAdd").disabled = false;
 };
 let remotesSeq = 0;
@@ -597,17 +614,53 @@ async function loadRemotes() {
   const my = ++remotesSeq; let err = "";
   try { const r = await invoke("list_remotes"); if (my !== remotesSeq) return; remotes = r; clearWarn("list_remotes"); }
   catch (e) { if (my !== remotesSeq) return; err = errText(e, "Nie udało się odczytać listy kont."); warnOnce("list_remotes", "Nie udało się wczytać kont: " + err); }
-  fillRemoteSelects();
+  fillRemoteSelects(); updateBrowseBtns();
   $("#remotes").innerHTML = err ? `<span class="err" data-nt>${esc("Nie udało się wczytać kont: " + err)}</span>`
-    : remotes.length ? remotes.map((r) => `<div class="remote"><span class="loc" style="padding:0;border:0;background:none"><span class="ic">${icon("cloud")}</span></span><div class="grow"><b data-nt>${esc(r.name)}:</b> <span class="muted" data-nt>${esc(r.kind)}</span></div><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button></div>`).join("") : '<span class="muted">Brak połączonych kont. Wybierz usługę poniżej.</span>';
+    : remotes.length ? remotes.map((r) => `<div class="remote" style="flex-wrap:wrap"><span class="loc" style="padding:0;border:0;background:none"><span class="ic">${icon("cloud")}</span></span><div class="grow"><b data-nt>${esc(r.name)}:</b> <span class="muted" data-nt>${esc(r.kind)}</span></div><button class="sm" data-t="${esc(r.name)}">Testuj</button><button class="sm" data-b="${esc(r.name)}">Przeglądaj</button><button class="sm danger" data-d="${esc(r.name)}">Usuń</button><div class="rtest muted" style="flex-basis:100%" data-rt="${esc(r.name)}" role="status"></div></div>`).join("") : '<span class="muted">Brak połączonych kont. Wybierz usługę poniżej.</span>';
+}
+function showTest(name, res) {
+  const el = $$("#remotes [data-rt]").find((x) => x.dataset.rt === name); if (!el) return;
+  if (typeof res === "string") { el.className = "rtest ok"; el.innerHTML = `<span data-nt>${esc(res)}</span>`; return; }
+  if (res.ok) { el.className = "rtest ok"; el.innerHTML = `<span>${esc(res.message || "Połączono.")}</span> <span class="muted">(${esc(res.ms)} ms)</span>`; }
+  else { el.className = "rtest err"; el.innerHTML = `<b>Błąd połączenia.</b> ${res.hint ? `<span>${esc(res.hint)}</span> ` : ""}<span class="muted" data-nt>${esc(res.error || "")}</span> <span class="muted">(${esc(res.ms ?? 0)} ms)</span>`; }
 }
 $("#remotes").addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d;
+  const t = e.target.closest("[data-t]")?.dataset.t, d = e.target.closest("[data-d]")?.dataset.d, br = e.target.closest("[data-b]")?.dataset.b;
   try {
-    if (t) { e.target.disabled = true; toast(await invoke("test_remote", { name: t }), "ok"); e.target.disabled = false; }
+    if (t) { const btn = e.target.closest("[data-t]"); btn.disabled = true; showTest(t, "Testuję…"); try { showTest(t, await invoke("test_remote", { name: t })); } catch (err) { showTest(t, { ok: false, error: errText(err), hint: "", ms: 0 }); } btn.disabled = false; }
+    if (br) openBrowser(br, "", null);
     if (d && (await ask("Usunąć konto?", `Konto „${d}” zostanie usunięte z aplikacji (dane w chmurze zostają).`, "Usuń", true))) { await invoke("delete_remote", { name: d }); await loadRemotes(); }
-  } catch (err) { toast("Błąd: " + err, "bad"); loadRemotes(); }
+  } catch (err) { toast("Błąd: " + errText(err), "bad"); loadRemotes(); }
 });
+
+// ---------- przeglądarka folderów zdalnych ----------
+let rb = { name: "", path: "", side: null, seq: 0 };
+async function openBrowser(name, path, side) {
+  rb = { name, path, side, seq: rb.seq };
+  $("#rbClose").textContent = side ? "Gotowe" : "Zamknij";
+  if (!$("#rbrowse").open) $("#rbrowse").showModal();
+  await browseTo(path);
+}
+async function browseTo(path) {
+  const my = ++rb.seq; rb.path = path;
+  $("#rbPath").textContent = rb.name + ":" + path; $("#rbMsg").textContent = "Wczytywanie…"; $("#rbList").innerHTML = "";
+  if (rb.side) { F()[rb.side].value = rb.name + ":" + path; checkPath(rb.side); }
+  try {
+    const list = await invoke("browse_remote", { name: rb.name, path });
+    if (my !== rb.seq) return;
+    $("#rbMsg").textContent = list.length ? "" : "Brak podfolderów.";
+    $("#rbList").innerHTML = list.filter((x) => x.is_dir !== false).map((x) => `<button type="button" class="sm ghost" role="listitem" style="display:block;width:100%;text-align:left" data-dir="${esc(x.name)}"><span class="ic">${icon("folder")}</span> <span data-nt>${esc(x.name)}</span></button>`).join("");
+  } catch (e) { if (my !== rb.seq) return; $("#rbMsg").textContent = "Nie udało się wczytać folderów: " + errText(e); }
+}
+$("#rbList").addEventListener("click", (e) => { const b = e.target.closest("[data-dir]"); if (b) browseTo(rb.path ? rb.path + "/" + b.dataset.dir : b.dataset.dir); });
+$("#rbUp").onclick = () => browseTo(rb.path.split("/").slice(0, -1).join("/"));
+$("#rbClose").onclick = () => $("#rbrowse").close();
+// kreator: przycisk „Przeglądaj…” widoczny, gdy ścieżka zaczyna się od nazwy znanego konta
+function remoteOf(v) { const m = /^([A-Za-z0-9][A-Za-z0-9_-]+):(.*)$/.exec(v.trim()); return m && remotes.some((r) => r.name === m[1]) ? { name: m[1], path: m[2].replace(/^\/+|\/+$/g, "") } : null; }
+function updateBrowseBtns() { ["left", "right"].forEach((s) => { const b = $(`[data-browse=${s}]`); if (b) b.hidden = !remoteOf(F()[s].value); }); }
+["left", "right"].forEach((s) => { ["input", "change"].forEach((ev) => F()[s].addEventListener(ev, updateBrowseBtns)); });
+$$("[data-browse]").forEach((b) => b.addEventListener("click", () => { const r = remoteOf(F()[b.dataset.browse].value); if (r) openBrowser(r.name, r.path, b.dataset.browse); }));
+$("#editor").addEventListener("toggle", updateBrowseBtns);
 
 // ---------- ustawienia i start ----------
 $("#pauseAll").onclick = async () => {
@@ -638,7 +691,7 @@ $("#vssAuto").onchange = async (e) => {
 };
 hydrateIcons();
 loadVss();
-loadRemotes(); refreshJobs().then(refreshStatus);
+loadKinds(); loadRemotes(); refreshJobs().then(refreshStatus);
 setInterval(refreshStatus, 2000);
 
 // ---------- drzewo różnic (symulacja) ----------
