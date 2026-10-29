@@ -931,6 +931,26 @@ fn locate_rclone(app: &tauri::AppHandle) {
     }
 }
 
+/// Dopasowuje rozmiar okna do dostępnego obszaru ekranu (bez paska zadań): na niskich ekranach okno
+/// o stałej wysokości wystawało poza ekran i ucinało stopkę z przyciskami kreatora.
+fn fit_window(w: &tauri::WebviewWindow) {
+    let Ok(Some(mon)) = w.current_monitor().or_else(|_| w.primary_monitor()) else {
+        return;
+    };
+    let scale = mon.scale_factor().max(0.5);
+    let area = mon.work_area();
+    // zapas na ramkę i pasek tytułu okna
+    let max_w = (area.size.width as f64 / scale - 24.0).max(480.0);
+    let max_h = (area.size.height as f64 / scale - 48.0).max(400.0);
+    let (want_w, want_h) = (1040.0_f64.min(max_w), 700.0_f64.min(max_h));
+    let _ = w.set_min_size(Some(tauri::LogicalSize::new(
+        860.0_f64.min(max_w),
+        480.0_f64.min(max_h),
+    )));
+    let _ = w.set_size(tauri::LogicalSize::new(want_w, want_h));
+    let _ = w.center();
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -1003,8 +1023,9 @@ fn main() {
             tm.apply(load_settings(&app.state::<Runner>()).language == "en");
             spawn_notifier(app.handle().clone(), tray, tm);
 
-            if std::env::args().any(|a| a == "--hidden") {
-                if let Some(w) = app.get_webview_window("main") {
+            if let Some(w) = app.get_webview_window("main") {
+                fit_window(&w);
+                if std::env::args().any(|a| a == "--hidden") {
                     let _ = w.hide();
                 }
             }

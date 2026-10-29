@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const R = reporter("r3_dialog_fit");
 (async () => {
-  for (const [w, h] of [[1040, 700], [860, 560], [1280, 800], [1920, 1080]]) {
+  for (const [w, h] of [[1040, 700], [860, 560], [860, 480], [1000, 620], [1280, 800], [1920, 1080]]) {
     const { browser, page } = await launch({ viewport: { width: w, height: h }, setup: () => { window.__stub.jobs = []; } });
     await page.click("#newJob"); await page.fill("[name=left]", "C:\\A"); await page.fill("[name=right]", "D:\\B");
     const bad = [];
