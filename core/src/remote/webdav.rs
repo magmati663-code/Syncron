@@ -304,8 +304,8 @@ fn pick_hash(text: &str) -> Option<Hash> {
 /// Odporny parser odpowiedzi `207 Multi-Status`: ignoruje prefiksy przestrzeni nazw (`D:`, `d:`, domyślna),
 /// bierze tylko właściwości z `propstat` o statusie 2xx.
 fn parse_multistatus(xml: &str) -> RResult<Vec<RawResp>> {
-    use quick_xml::events::Event;
-    let mut rd = quick_xml::Reader::from_str(xml);
+    use quick_xml_037::events::Event;
+    let mut rd = quick_xml_037::Reader::from_str(xml);
     let mut stack: Vec<String> = Vec::new();
     let mut text = String::new();
     let mut out = Vec::new();

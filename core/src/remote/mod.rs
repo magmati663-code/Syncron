@@ -16,6 +16,8 @@ use std::sync::Arc;
 pub mod ftp;
 pub mod http;
 pub mod mem;
+pub mod s3;
+pub mod sftp;
 pub mod spec;
 pub mod webdav;
 
@@ -213,6 +215,8 @@ pub fn open(kind: &str, p: &Params, root: &str) -> RResult<Box<dyn Backend>> {
         "webdav" => Ok(Box::new(webdav::WebDav::new(p, &root)?)),
         "ftp" => Ok(Box::new(ftp::FtpBackend::new("ftp", p, &root)?)),
         "ftps" => Ok(Box::new(ftp::FtpBackend::new("ftps", p, &root)?)),
+        "s3" => Ok(Box::new(s3::S3Backend::new(p, &root)?)),
+        "sftp" => Ok(Box::new(sftp::SftpBackend::new(p, &root)?)),
         other => Err(RError::Failed(format!(
             "rodzaj konta „{other}” nie jest jeszcze obsługiwany"
         ))),
