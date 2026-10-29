@@ -10,7 +10,7 @@ Nowe pola `Job` (nazwa → typ → domyślnie → znaczenie):
 
 | pole | typ | domyślnie | znaczenie |
 |---|---|---|---|
-| `compare` | `"TimeAndSize"\|"SizeOnly"\|"Content"` | `TimeAndSize` | jak uznać plik za „taki sam”: czas+rozmiar / tylko rozmiar / zawartość (BLAKE3 dla lokalnych; dla rclone: rozmiar+hash gdy backend go podaje, inaczej czas+rozmiar) |
+| `compare` | `"TimeAndSize"\|"SizeOnly"\|"Content"` | `TimeAndSize` | jak uznać plik za „taki sam”: czas+rozmiar / tylko rozmiar / zawartość (BLAKE3 dla lokalnych; dla kont zdalnych: rozmiar+hash gdy backend go podaje, inaczej czas+rozmiar) |
 | `time_tolerance_secs` | `u32` (0..=86400) | `2` | tolerancja czasu modyfikacji (FAT: 2 s) |
 | `time_shift_hours` | `u32` (0..=23) | `0` | „ignoruj przesunięcie czasu”: pliki różniące się o całkowitą liczbę godzin ≤ N (zmiana czasu, strefa) są takie same |
 | `symlinks` | `"Skip"\|"Follow"` | `Skip` | dowiązania symboliczne: pomijaj (obecnie) albo podążaj przy ODCZYCIE źródła (zapis przez dowiązanie nadal zabroniony) |
@@ -55,8 +55,8 @@ Obsługiwane `kind` (biała lista `REMOTE_KINDS`): `drive`, `onedrive`, `webdav`
 `host`, `port`, `user`, `pass`, `domain`. Dla `webdav`: `url`, `vendor` (`nextcloud|owncloud|sharepoint|other`), `user`, `pass`.
 Hasła/klucze/tokeny nigdy w argv (jak dziś: stdin / `set_remote_keys`).
 
-Nowe polecenia Tauri: `remote_kinds`, `browse_remote(name, path) -> Vec<DirEntry{name,is_dir}>` (rclone `lsf`/`lsd`
-z limitem czasu i liczby wpisów), `remote_about(name) -> { total, used, free }` (rclone `about`, opcjonalnie),
+Nowe polecenia Tauri: `remote_kinds`, `browse_remote(name, path) -> Vec<DirEntry{name,is_dir}>` (`Backend::list_dir`
+z limitem czasu i liczby wpisów), `remote_about(name) -> { total, used, free }` (`Backend::about`, opcjonalnie),
 `test_remote(name)` (istnieje; dodać zwrot czasu odpowiedzi i wersji serwera, jeśli dostępne).
 UI: wybieranie folderu zdalnego (przeglądarka drzewa w kreatorze, krok 1: przycisk „Przeglądaj…” przy ścieżce z `konto:`).
 

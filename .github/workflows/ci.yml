@@ -15,15 +15,6 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Instalacja rclone (testy ścieżki chmurowej)
-        shell: bash
-        run: |
-          case "$RUNNER_OS" in
-            Linux) curl -fsSL https://rclone.org/install.sh | sudo bash ;;
-            macOS) brew install rclone ;;
-            Windows) choco install rclone -y --no-progress ;;
-          esac || echo "::warning::nie udało się zainstalować rclone: testy rclone zostaną pominięte"
-          rclone version || true
       - name: Testy silnika (Windows, macOS, Linux)
         run: cargo test -p syncron-core -p syncron-cli -- --nocapture --test-threads=1
       - name: Clippy silnika i CLI

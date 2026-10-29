@@ -34,6 +34,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "bin/*"
+    ],
     "windows": {
       "nsis": {
         "languages": [

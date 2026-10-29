@@ -69,8 +69,8 @@ pub fn list(account: &str, root: &str) -> Result<Scan, String> {
     let mut out = Vec::with_capacity(entries.len());
     let mut skipped = Vec::new();
     for e in entries {
-        // wiodący '/' traktujemy jak ścieżkę względną korzenia; reszta niebezpiecznych ścieżek jest odrzucana
-        let p = e.path.strip_prefix('/').unwrap_or(&e.path).to_string();
+        // ścieżki z serwera to dane z zewnątrz: `..`, bezwzględne (wiodący `/`), puste komponenty i znaki sterujące odrzucamy
+        let p = e.path;
         if let Err(why) = names::check_rel(&p) {
             skipped.push(format!(
                 "pominięto niebezpieczną ścieżkę ze zdalnego listingu: {why}"

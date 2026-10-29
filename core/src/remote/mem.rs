@@ -27,6 +27,17 @@ pub struct Faults {
     pub busy_paths: Vec<String>,
     /// Wysłany plik jest zapisywany bez ostatniego bajtu (niezgodny rozmiar po wysłaniu).
     pub truncate_upload: bool,
+    /// Zapisy (wysłanie, usunięcie, zmiana nazwy) na ścieżkach zawierających jeden z tych fragmentów kończą się
+    /// błędem braku miejsca (nie `Busy`).
+    pub fail_write_paths: Vec<String>,
+    /// Numery prób wysłania (od 0, liczone łącznie z nieudanymi), które kończą się błędem sieci.
+    pub fail_upload_on: Vec<usize>,
+    /// Numery prób wysłania (od 0), które kończą się `Busy`.
+    pub busy_upload_on: Vec<usize>,
+    /// Wpisy, które `list_files` pomija, choć `stat` je widzi (niespójny listing). Dopasowanie: równość ścieżki.
+    pub hide_from_list: Vec<String>,
+    /// Opóźnienie każdego wysłania/pobrania w milisekundach (test równoległości).
+    pub latency_ms: u64,
 }
 
 #[derive(Default)]
@@ -34,6 +45,7 @@ struct State {
     files: BTreeMap<String, (Vec<u8>, i64)>,
     faults: Faults,
     uploads: usize,
+    attempts: usize,
     hash: bool,
     ops: usize,
 }
@@ -67,6 +79,7 @@ impl MemBackend {
         let st = g.entry(id.to_string()).or_default();
         st.faults = f;
         st.uploads = 0;
+        st.attempts = 0;
     }
     pub fn clear_faults(id: &str) {
         Self::set_faults(id, Faults::default());
@@ -119,6 +132,22 @@ impl MemBackend {
             Err(RError::Auth("HTTP 401 (wstrzyknięty błąd)".into()))
         } else {
             Ok(())
+        }
+    }
+    fn check_write(&self, full: &str) -> RResult<()> {
+        if self
+            .with(|s| s.faults.fail_write_paths.iter().any(|p| full.contains(p.as_str())))
+        {
+            return Err(RError::Quota(format!(
+                "wstrzyknięty brak miejsca: {full}"
+            )));
+        }
+        Ok(())
+    }
+    fn lag(&self) {
+        let ms = self.with(|s| s.faults.latency_ms);
+        if ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
         }
     }
     fn check_busy(&self, full: &str) -> RResult<()> {
@@ -175,6 +204,7 @@ impl Backend for MemBackend {
                     path: k[root_prefix.len().min(k.len())..].to_string(),
                     meta: Self::meta(st, d, *t),
                 })
+                .filter(|e| !st.faults.hide_from_list.contains(&e.path))
                 .collect()
         }))
     }
@@ -223,6 +253,7 @@ impl Backend for MemBackend {
         if self.with(|s| s.faults.fail_download) {
             return Err(RError::Network("wstrzyknięty błąd pobierania".into()));
         }
+        self.lag();
         let full = self.full(&clean_path(path)?);
         let data = self
             .with(|m| m.files.get(&full).map(|(d, _)| d.clone()))
@@ -233,8 +264,18 @@ impl Backend for MemBackend {
         self.check_auth()?;
         let full = self.full(&clean_path(path)?);
         self.check_busy(&full)?;
+        self.check_write(&full)?;
+        self.lag();
         let mut data = std::fs::read(src).map_err(|e| RError::Failed(e.to_string()))?;
         self.with(|st| {
+            let attempt = st.attempts;
+            st.attempts += 1;
+            if st.faults.busy_upload_on.contains(&attempt) {
+                return Err(RError::Busy("wstrzyknięta zajętość".into()));
+            }
+            if st.faults.fail_upload_on.contains(&attempt) {
+                return Err(RError::Network("wstrzyknięty błąd wysyłania".into()));
+            }
             if let Some(n) = st.faults.fail_upload_after {
                 if st.uploads >= n {
                     return Err(RError::Network("wstrzyknięty błąd wysyłania".into()));
@@ -252,6 +293,7 @@ impl Backend for MemBackend {
         self.check_auth()?;
         let full = self.full(&clean_path(path)?);
         self.check_busy(&full)?;
+        self.check_write(&full)?;
         if self.with(|s| s.faults.fail_delete) {
             return Err(RError::Network("wstrzyknięty błąd usuwania".into()));
         }
@@ -262,6 +304,8 @@ impl Backend for MemBackend {
         self.check_auth()?;
         let (f, t) = (self.full(&clean_path(from)?), self.full(&clean_path(to)?));
         self.check_busy(&f)?;
+        self.check_write(&f)?;
+        self.check_write(&t)?;
         if self.with(|s| s.faults.fail_rename) {
             return Err(RError::Failed("wstrzyknięty brak przenoszenia".into()));
         }

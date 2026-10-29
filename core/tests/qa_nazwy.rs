@@ -693,7 +693,7 @@ fn r2_dlugosc_nazwy_windows() {
 fn r2_location_parse_polskie_i_dziwne() {
     assert!(matches!(
         Location::parse("Dysk Źródłowy:Dane"),
-        Location::Rclone(_)
+        Location::Remote { .. }
     ));
     assert!(matches!(Location::parse("/home/ą:ę/x"), Location::Local(_)));
     assert!(matches!(Location::parse("  /tmp/x  "), Location::Local(_)));

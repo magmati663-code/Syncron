@@ -30,8 +30,8 @@ Instalatory nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu:
   wersji; przywracanie dowolnej wersji jednym kliknięciem.
 - **Warunki i wyzwalacze:** tylko przy zasilaniu sieciowym, tylko w wybranych sieciach Wi-Fi (wykrywanie najlepszym wysiłkiem),
   uruchomienie po podłączeniu dysku, wybudzeniu z uśpienia i zmianie sieci.
-- **Weryfikacja sum kontrolnych** (BLAKE3) po kopiowaniu lokalnym; chmury weryfikuje rclone.
-- **Szyfrowanie po stronie klienta** (rclone crypt) jako konto chmurowe; **wybór podfolderów** i drzewo różnic w symulacji.
+- **Weryfikacja sum kontrolnych** (BLAKE3) po kopiowaniu lokalnym; dla kont zdalnych kontrola rozmiaru po wysłaniu oraz porównanie skrótu serwera (MD5/SHA-1/SHA-256), gdy go podaje.
+- **Wybór podfolderów** i drzewo różnic w symulacji.
 - Ikona w zasobniku zmienia kolor wg stanu (zielona / niebieska / żółta / czerwona / szara); podgląd konfliktu pokazuje rozmiar i czas obu wersji.
 - Powiadomienia systemowe, kopia/import konfiguracji, interfejs PL/EN, automatyczne aktualizacje (wymagają klucza: SIGNING.md).
 - Historia operacji z eksportem CSV i wyszukiwaniem.
@@ -52,14 +52,23 @@ Kody wyjścia: 0 = ok, 1 = błąd, 2 = konflikty/błędy plików/zablokowanie. U
 ## Pomijanie plików: `.syncignore`
 Plik `.syncignore` w głównym folderze któregokolwiek boku (jedna maska na linię, `#` komentarz, `folder/` pomija cały folder) działa dla obu stron i wędruje razem z danymi.
 
-## Chmury
-Połączenia z chmurami obsługuje dołączony do instalatora [rclone](https://rclone.org). Konta dodajesz w zakładce
-„Konta chmurowe”, a potem wybierasz je jako lokalizację (`gdrive:Folder`).
-**Bitrix24:** podaj adres WebDAV swojego Dysku (Bitrix24 → Dysk → „Połącz dysk sieciowy”) oraz login i hasło/hasło aplikacji.
+## Konta zdalne (własna warstwa, bez programów zewnętrznych)
+Syncron łączy się z serwerami wyłącznie własnym kodem (`core/src/remote/`): WebDAV (Nextcloud, ownCloud, Bitrix24...), FTP/FTPS,
+SFTP, S3 oraz Google Drive, OneDrive i Dropbox. Konta dodajesz w zakładce „Konta”, a potem wybierasz je jako lokalizację
+(`konto:Folder`, np. `nextcloud:Dokumenty`).
+
+- Dane kont (host, użytkownik...) leżą w `accounts.json` w folderze danych. **Hasła i tokeny nigdy nie trafiają do tego pliku**:
+  są w magazynie kluczy systemu (Windows Credential Manager, macOS Keychain, Linux Secret Service). Gdy go nie ma (np. Linux bez D-Bus,
+  serwer bez sesji graficznej), sekrety trafiają do pliku `secrets.enc` zaszyfrowanego XChaCha20-Poly1305 losowym kluczem z `secrets.key`
+  (uprawnienia 0600). Zmienna `SYNCRON_SECRETS=file` wymusza plik.
+- Usunięcie konta usuwa także jego sekrety. Uszkodzony `secrets.enc` jest odkładany jako `*.corrupt-*`, a konta pokazują „wymaga zalogowania”.
+- **Migracja z rclone:** jeśli w folderze danych jest stary `rclone.conf`, aplikacja proponuje import (`syncron accounts import-rclone [plik]`).
+  Konta WebDAV/FTP/SFTP/S3 przenoszą się razem z hasłami; konta Google Drive/OneDrive/Dropbox trzeba zalogować ponownie.
+- CLI: `syncron accounts list|test <nazwa>|delete <nazwa>`.
 
 ## Rozwój
 ```
 cargo test -p syncron-core          # silnik + testy integracyjne
-cd app && npm install && npx tauri dev  # aplikacja (wymaga rclone w PATH lub app/src-tauri/bin)
+cd app && npm install && npx tauri dev  # aplikacja
 ```
 Struktura: `core/` (silnik w Rust), `app/src-tauri` (Tauri: komendy, tray), `app/ui` (interfejs HTML/JS).
