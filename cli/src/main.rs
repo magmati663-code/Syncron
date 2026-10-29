@@ -395,7 +395,7 @@ fn check_opts(rest: &[String], allowed: &[&str]) -> Result<(), String> {
     }
 }
 
-const COMMANDS: [&str; 10] = [
+const COMMANDS: [&str; 11] = [
     "list",
     "report",
     "run",

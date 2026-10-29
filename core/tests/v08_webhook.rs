@@ -495,6 +495,7 @@ fn symulacja_nie_wysyla_webhooka() {
             force: false,
             progress: None,
             skip: Default::default(),
+            cancel: None,
         },
     )
     .unwrap();
