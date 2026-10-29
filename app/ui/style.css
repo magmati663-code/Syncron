@@ -170,3 +170,19 @@ dialog::backdrop{background:rgba(10,15,30,.55);backdrop-filter:blur(2px)}
 #cfYes.danger:hover{color:#fff;filter:brightness(1.1)}
 [hidden]{display:none!important}
 .treerow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.treerow>label{flex:1}.treerow .kids{flex-basis:100%}
+
+/* v08 kreator */
+.box.v08{display:flex;flex-direction:column;gap:10px;box-shadow:none}
+.cgrid{display:flex;flex-direction:column;gap:8px}
+.crow{display:grid;grid-template-columns:1fr minmax(160px,220px);gap:12px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.crow>div{display:flex;flex-direction:column;gap:2px;min-width:0}.crow .muted{font-size:12px}
+#report{width:min(960px,94vw)}
+.pvbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 8px}
+.pvbar input[type=search]{flex:1;min-width:180px}
+.pvwrap{height:min(46vh,420px);overflow:auto;border:1px solid var(--line);border-radius:10px}
+.pvt{width:100%;table-layout:fixed;border-collapse:collapse}
+.pvt th{position:sticky;top:0;background:var(--panel2);z-index:1;text-align:left}
+.pvt td,.pvt th{padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pvt .pvc{width:36px;text-align:center}.pvt th:nth-child(2){width:150px}.pvt td:nth-child(2){width:150px}.pvt .pvs{width:90px;text-align:right}
+.pvt .pvsp td{padding:0;border:0}
+@media (max-width:900px){.crow{grid-template-columns:1fr}}

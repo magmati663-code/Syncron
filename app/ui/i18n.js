@@ -135,9 +135,70 @@
     "Min. rozmiar pliku nie może być większy niż maksymalny.": "Min. file size cannot be larger than the maximum.",
     "plik zajęty": "file in use", "Brak dostępu do folderu": "No access to the folder",
     "Zapisano": "Saved", "jeszcze nie": "not yet", "przed chwilą": "just now", "Jeszcze nie uruchomione": "Not run yet",
+    // v08: kreator (tryb własny, porównywanie, filtry, zaawansowane), podgląd, import FreeFileSync
+    "Importuj z FreeFileSync…": "Import from FreeFileSync…", "Import z FreeFileSync": "Import from FreeFileSync",
+    "Zadania z pliku zostaną zapisane jako wyłączone i bez poleceń. Przejrzyj je i włącz po sprawdzeniu w „Symulacji”.": "Jobs from the file are saved as disabled and without commands. Review them and enable them after checking in “Simulate”.",
+    "Zapisz zaznaczone": "Save selected", "Wykonaj zaznaczone": "Run selected", "Akcja": "Action", "Ścieżka": "Path",
+    "Zaznacz wszystko": "Select all", "Odznacz wszystko": "Deselect all", "Filtruj ścieżki…": "Filter paths…",
+    "Brak pozycji pasujących do filtra.": "No items match the filter.",
+    "Odznaczone pozycje zostaną pominięte. „Wykonaj zaznaczone” uruchamia synchronizację tylko z zaznaczonymi akcjami.": "Unticked items will be skipped. “Run selected” runs the synchronization with the ticked actions only.",
+    "⚙ Własny": "⚙ Custom", "Osobna akcja dla każdego rodzaju różnicy": "A separate action for each kind of difference",
+    "Reguły trybu własnego": "Custom mode rules",
+    "Dla każdego rodzaju różnicy wybierz, co zrobić. „Pomiń” zostawia pliki bez zmian. Zabezpieczenia (blokada masowego usuwania, kosz) działają jak w pozostałych trybach.": "For each kind of difference choose what to do. “Skip” leaves the files unchanged. Safeguards (mass-delete guard, trash) work as in the other modes.",
+    "Wszystkie reguły to „Pomiń” — to zadanie niczego nie zsynchronizuje.": "All rules are “Skip” — this job will not synchronize anything.",
+    "Tylko po lewej": "Left only", "Plik istnieje tylko po lewej stronie.": "The file exists on the left side only.",
+    "Tylko po prawej": "Right only", "Plik istnieje tylko po prawej stronie.": "The file exists on the right side only.",
+    "Nowszy po lewej": "Newer on the left", "Plik jest po obu stronach, nowszy jest lewy.": "The file is on both sides; the left one is newer.",
+    "Nowszy po prawej": "Newer on the right", "Plik jest po obu stronach, nowszy jest prawy.": "The file is on both sides; the right one is newer.",
+    "Różne przy tym samym czasie": "Different with the same time", "Ten sam czas modyfikacji, ale inny rozmiar lub zawartość.": "Same modification time but a different size or content.",
+    "Pomiń": "Skip", "Kopiuj w prawo →": "Copy to the right →", "← Kopiuj w lewo": "← Copy to the left", "Usuń po lewej": "Delete on the left", "Usuń po prawej": "Delete on the right",
+    "Porównywanie plików": "File comparison", "Jak uznać, że plik się zmienił": "How to decide a file has changed",
+    "Czas modyfikacji i rozmiar (domyślnie)": "Modification time and size (default)", "Tylko rozmiar": "Size only", "Zawartość pliku (suma kontrolna)": "File content (checksum)",
+    "Plik jest taki sam, gdy zgadzają się czas modyfikacji (w tolerancji) i rozmiar. Szybkie — zawartość nie jest czytana.": "A file is the same when modification time (within tolerance) and size match. Fast — content is not read.",
+    "Liczy się tylko rozmiar. Najszybsze, ale zmiana pliku bez zmiany rozmiaru zostanie przeoczona.": "Only size counts. Fastest, but a change that keeps the size will be missed.",
+    "Porównywana jest zawartość pliku (suma BLAKE3). Najdokładniejsze, ale wolne: każdy plik jest czytany w całości. W chmurze używane są sumy kontrolne dostawcy, jeśli je podaje.": "File content is compared (BLAKE3 checksum). Most accurate but slow: every file is read in full. In the cloud the provider's checksums are used when available.",
+    "Tolerancja czasu (sekundy, 0–86400)": "Time tolerance (seconds, 0–86400)", "Ignoruj przesunięcie czasu (godziny, 0–23)": "Ignore time shift (hours, 0–23)",
+    "Tolerancja: pliki z czasem różniącym się o mniej niż tyle sekund są takie same (systemy FAT zaokrąglają czas do 2 s). Przesunięcie: pliki różniące się o całkowitą liczbę godzin do podanej wartości (zmiana czasu letni/zimowy, strefa czasowa) są traktowane jako takie same. 0 = wyłączone.": "Tolerance: files whose times differ by less than this many seconds are the same (FAT rounds time to 2 s). Shift: files differing by a whole number of hours up to the given value (daylight saving, time zone) are treated as the same. 0 = off.",
+    "Pomijaj pliki młodsze niż (dni)": "Skip files newer than (days)", "Pomijaj pliki starsze niż (dni)": "Skip files older than (days)",
+    "Wiek liczony jest od ostatniej modyfikacji pliku. „Młodsze niż” pomija świeżo zmienione pliki (np. otwarte w edytorze), „starsze niż” — stare archiwa.": "Age is counted from the file's last modification. “Newer than” skips freshly changed files (e.g. open in an editor), “older than” skips old archives.",
+    "Pomijaj pliki i foldery ukryte": "Skip hidden files and folders", "Nazwy zaczynające się od kropki; w Windows także z atrybutem „Ukryty”.": "Names starting with a dot; on Windows also those with the “Hidden” attribute.",
+    "Dowiązania symboliczne": "Symbolic links", "Pomijaj (domyślnie, bezpieczne)": "Skip (default, safe)", "Podążaj za dowiązaniami": "Follow links",
+    "Uwaga: podążanie za dowiązaniami odczytuje pliki spoza folderu zadania, a pętle dowiązań mogą zwielokrotnić dane. Zapis przez dowiązania nadal jest zabroniony. Włącz tylko, gdy wiesz, na co wskazują.": "Warning: following links reads files from outside the job folder, and link loops can multiply data. Writing through links is still forbidden. Enable only if you know what they point to.",
+    "Styl wersji w koszu": "Trash version style", "Foldery z datą (każda wersja osobno)": "Dated folders (each version kept)", "Zastępuj (tylko najnowsza kopia pliku)": "Replace (latest copy of a file only)",
+    "Wykrywaj przeniesienia i zmiany nazwy": "Detect moves and renames", "Przeniesiony plik jest przenoszony po drugiej stronie zamiast kopiowany i usuwany. Wyłącz, jeśli wolisz prostą kopię.": "A moved file is moved on the other side instead of copied and deleted. Turn off if you prefer a plain copy.",
+    "Zachowuj uprawnienia plików": "Preserve file permissions", "Linux i macOS: kopiuje bity uprawnień (chmod). W Windows bez efektu.": "Linux and macOS: copies permission bits (chmod). No effect on Windows.",
+    "Polecenia przed i po synchronizacji": "Commands before and after synchronization",
+    "Uwaga: polecenia są wykonywane z Twoimi uprawnieniami. Nie wklejaj poleceń, których nie rozumiesz ani nieznanych skryptów — mogą skasować lub wysłać dane. Polecenie podane przed synchronizacją, które zakończy się błędem, anuluje przebieg. Pola puste = brak polecenia.": "Warning: commands run with your privileges. Do not paste commands you do not understand or unknown scripts — they can delete or send data. A command before synchronization that fails cancels the run. Empty fields = no command.",
+    "Polecenie przed synchronizacją": "Command before synchronization", "Polecenie po synchronizacji": "Command after synchronization",
+    "np. /usr/local/bin/zamontuj-dysk": "e.g. /usr/local/bin/mount-drive", "np. /usr/local/bin/powiadom": "e.g. /usr/local/bin/notify",
+    "Limit czasu poleceń (sekundy, 1–86400)": "Command time limit (seconds, 1–86400)",
+    "Po przekroczeniu limitu polecenie jest przerywane. Po synchronizacji dostępne są zmienne środowiskowe SYNCRON_JOB, SYNCRON_COPIED, SYNCRON_DELETED, SYNCRON_ERRORS, SYNCRON_LEFT, SYNCRON_RIGHT. Importowane zadania nigdy nie zawierają poleceń.": "After the limit the command is killed. After synchronization these environment variables are available: SYNCRON_JOB, SYNCRON_COPIED, SYNCRON_DELETED, SYNCRON_ERRORS, SYNCRON_LEFT, SYNCRON_RIGHT. Imported jobs never contain commands.",
+    "Tryb własny: dla każdego rodzaju różnicy obowiązuje osobna reguła.": "Custom mode: a separate rule applies to each kind of difference.",
+    "Pliki i foldery ukryte są pomijane.": "Hidden files and folders are skipped.",
+    "Dowiązania symboliczne: podążanie za nimi przy odczycie (ostrożnie).": "Symbolic links: followed when reading (be careful).",
+    "Wykrywanie przeniesień jest wyłączone: przeniesiony plik zostanie skopiowany od nowa.": "Move detection is off: a moved file will be copied again.",
+    "Uprawnienia plików są kopiowane (Linux i macOS).": "File permissions are copied (Linux and macOS).",
+    "Przed synchronizacją zostanie uruchomione polecenie; jego błąd anuluje przebieg.": "A command runs before synchronization; its failure cancels the run.",
+    "Po synchronizacji zostanie uruchomione polecenie.": "A command runs after synchronization.",
+    "Nie udało się zaimportować pliku FreeFileSync — sprawdź, czy to poprawny plik .ffs_gui lub .ffs_batch.": "Could not import the FreeFileSync file — check that it is a valid .ffs_gui or .ffs_batch file.",
+    "W pliku nie znaleziono żadnych par folderów do zaimportowania.": "No folder pairs to import were found in the file.",
+    "Zaznacz co najmniej jedno zadanie do zapisania.": "Select at least one job to save.",
+    "zapis nie powiódł się": "saving failed", "Wybierz plik FreeFileSync": "Choose a FreeFileSync file",
+    "Wiek plików: „młodsze niż” nie może być większe niż „starsze niż” — żaden plik nie spełniłby obu warunków.": "File age: “newer than” cannot exceed “older than” — no file could satisfy both conditions.",
   };
 
   const RULES = [
+    // v08
+    [/^Zaznaczono (\d+) z (\d+)(?: · widocznych: (\d+))?$/, (a, b, c) => `Selected ${a} of ${b}` + (c ? ` · visible: ${c}` : "")],
+    [/^Wykonano zaznaczone akcje: (\d+)$/, "Ran the selected actions: $1"],
+    [/^Tryb: (.+)$/, (m) => "Mode: " + ({ "dwustronna": "two-way", "lewa do prawej": "left to right", "prawa do lewej": "right to left", "własny": "custom" }[m] || m), true],
+    [/^Własny — (.+): (.+)\.$/, (c, a) => "Custom — " + ({ "tylko po lewej": "left only", "tylko po prawej": "right only", "nowszy po lewej": "newer on the left", "nowszy po prawej": "newer on the right", "różne przy tym samym czasie": "different with the same time" }[c] || c) + ": " + ({ "pomiń": "skip", "kopiuj w prawo": "copy to the right", "kopiuj w lewo": "copy to the left", "usuń po lewej": "delete on the left", "usuń po prawej": "delete on the right" }[a] || a) + "."],
+    [/^Porównywanie: (.+)\.$/, (m) => "Comparison: " + ({ "czas modyfikacji i rozmiar": "modification time and size", "tylko rozmiar (najszybsze, może przeoczyć zmiany)": "size only (fastest, may miss changes)", "zawartość plików (wolniejsze, dokładniejsze)": "file content (slower, more accurate)" }[m] || m) + "."],
+    [/^Tolerancja czasu: (\d+) s\.$/, "Time tolerance: $1 s."],
+    [/^Ignorowane przesunięcie czasu: do (\d+) godz\.$/, "Ignored time shift: up to $1 h."],
+    [/^Pomijane są pliki młodsze niż (\d+) dni\.$/, "Files newer than $1 days are skipped."],
+    [/^Pomijane są pliki starsze niż (\d+) dni\.$/, "Files older than $1 days are skipped."],
+    [/^Limit czasu poleceń: (\d+) s\.$/, "Command time limit: $1 s."],
     [/^Ostatnio (.+)$/, "Last run $1"], [/^(\d+) min temu$/, "$1 min ago"], [/^(\d+) godz\. temu$/, "$1 h ago"],
     [/^skopiowano (\d+), usunięto (\d+)$/, "copied $1, deleted $2"], [/^następne (.+)$/, "next $1"],
     [/^·\s*skopiowano (\d+), usunięto (\d+)$/, "· copied $1, deleted $2"], [/^· następne (.+)$/, "· next $1"],
@@ -148,7 +209,7 @@
     [/^Czeka na warunki:$/, "Waiting for conditions:"], [/^Zatrzymano ze względów bezpieczeństwa:$/, "Stopped for safety reasons:"],
     [/^Symulacja: (.+)$/, "Simulation: $1", true], [/^Przeskanowano:$/, "Scanned:"], [/^(\d+) \/ (\d+)$/, "$1 / $2"],
     [/^plików po lewej i$/, "files on the left and"], [/^po prawej\. Planowanych działań:$/, "on the right. Planned actions:"],
-    [/^Krok (\d) z (\d)/, "Step $1 of $2"], [/^Wyeksportowano zadań: (\d+)$/, "Exported jobs: $1"], [/^Zaimportowano zadań: (\d+)( \(wyłączone — włącz je po sprawdzeniu\))?$/, (m, n, d) => "Imported jobs: " + n + (d ? " (disabled — enable them after checking)" : "")],
+    [/^Krok (\d) z (\d)/, "Step $1 of $2"], [/^Wyeksportowano zadań: (\d+)$/, "Exported jobs: $1"], [/^Zaimportowano zadań: (\d+)( \(wyłączone — włącz je po sprawdzeniu\))?$/, (n, d) => "Imported jobs: " + n + (d ? " (disabled — enable them after checking)" : "")],
     [/^Przywrócono jako: (.+)$/, "Restored as: $1", true], [/^Dostępna wersja (.+)$/, "Version $1 available"], [/^Dostępna aktualizacja (.+)$/, "Update $1 available"],
     [/^(\d+) wersji\)?$/, "$1 versions"], [/^\((\d+) wersji\)$/, "($1 versions)"],
     [/^Wersja pliku „(.+)” zostanie usunięta bez możliwości przywrócenia\.$/, "The version of “$1” will be deleted permanently.", true],
@@ -174,13 +235,13 @@
     [/^Limit prędkości: (.+?) KB\/s\.$/, "Speed limit: $1 KB/s.", true],
     [/^limit (.+?) KB\/s$/, "limit $1 KB/s", true],
     [/^\\\\serwer\\udział$/, "\\\\server\\share", true],
-    [/^(Nie udało się wczytać zadań|Nie udało się zmienić stanu wstrzymania|Nie udało się wczytać historii|Nie udało się wczytać kont): (.*)$/s, (m, a, b) => ({ "Nie udało się wczytać zadań": "Could not load jobs", "Nie udało się zmienić stanu wstrzymania": "Could not change the pause state", "Nie udało się wczytać historii": "Could not load history", "Nie udało się wczytać kont": "Could not load accounts" })[a] + ": " + b, true],
+    [/^(Nie udało się wczytać zadań|Nie udało się zmienić stanu wstrzymania|Nie udało się wczytać historii|Nie udało się wczytać kont): (.*)$/s, (a, b) => ({ "Nie udało się wczytać zadań": "Could not load jobs", "Nie udało się zmienić stanu wstrzymania": "Could not change the pause state", "Nie udało się wczytać historii": "Could not load history", "Nie udało się wczytać kont": "Could not load accounts" })[a] + ": " + b, true],
     [/^Brak odpowiedzi silnika synchronizacji — widoczny stan może być nieaktualny: (.*)$/s, "The sync engine is not responding — the displayed status may be outdated: $1", true],
     [/^Nie udało się wczytać ustawień — widoczne wartości są domyślne i nie zostaną zapisane: (.*)$/s, "Could not load settings — the values shown are defaults and will not be saved: $1", true],
     [/^Pokazano najnowsze (\d+) wpisów \(limit widoku\) — starsze są pominięte\. Eksport CSV obejmuje tylko wpisy widoczne po filtrze\.$/, "Showing the latest $1 entries (view limit) — older ones are omitted. The CSV export covers only the entries visible after filtering."],
     [/^Konto „(.+)” już istnieje\. Dodanie konta pod tą samą nazwą nadpisze jego konfigurację\. Aby tego uniknąć, zmień nazwę\.$/, "Account “$1” already exists. Adding an account with the same name will overwrite its configuration. Change the name to avoid this.", true],
-    [/^(.+): podaj liczbę całkowitą od (\S+) do (\S+)\.$/, (m, l, a, b) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size"}[l] || l) + ": enter a whole number from " + a + " to " + b + ".", true],
-    [/^(.+): podaj liczbę MB od 0 do ([\d\s\u00a0]+) \(puste lub 0 = bez limitu\)\.$/, (m, l, n) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size"}[l] || l) + ": enter a size in MB from 0 to " + n.replace(/[\s\u00a0]+/g, ",") + " (empty or 0 = no limit).", true],
+    [/^(.+): podaj liczbę całkowitą od (\S+) do (\S+)\.$/, (l, a, b) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size","Tolerancja czasu":"Time tolerance","Przesunięcie czasu":"Time shift","Wiek: młodsze niż (dni)":"Age: newer than (days)","Wiek: starsze niż (dni)":"Age: older than (days)","Limit czasu poleceń":"Command time limit"}[l] || l) + ": enter a whole number from " + a + " to " + b + ".", true],
+    [/^(.+): podaj liczbę MB od 0 do ([\d\s\u00a0]+) \(puste lub 0 = bez limitu\)\.$/, (l, n) => ({"Odstęp w minutach":"Interval in minutes","Okno czasowe, od godziny":"Time window from hour","Okno czasowe, do godziny":"Time window to hour","Blokada masowego usuwania":"Mass-delete guard","Równoległe transfery":"Parallel transfers","Dni w koszu":"Days in trash","Maks. wersji pliku":"Max. versions per file","Limit prędkości":"Speed limit","Limit poza godzinami":"Off-hours limit","Limit od godziny":"Limit from hour","Limit do godziny":"Limit to hour","Min. rozmiar pliku":"Min. file size","Maks. rozmiar pliku":"Max. file size"}[l] || l) + ": enter a size in MB from 0 to " + n.replace(/[\s\u00a0]+/g, ",") + " (empty or 0 = no limit).", true],
   ];
 
   // Frazy do podmiany wewnątrz dłuższych tekstów (składanych w kodzie z wielu części).
@@ -204,13 +265,13 @@
     [/plik zajęty/g, "file busy"], [/Lewa:/g, "Left:"], [/Prawa:/g, "Right:"], [/\(nowsza\)/g, "(newer)"], [/\(większa\)/g, "(larger)"],
     [/po podłączeniu dysku/g, "after a drive is connected"], [/po wybudzeniu z uśpienia/g, "after waking from sleep"], [/po zmianie sieci/g, "after a network change"],
     [/\bna bieżąco\b/g, "continuously"], [/\bręcznie\b/g, "manually"], [/\bcodziennie (\d)/g, "daily at $1"], [/\bco (\d+) min\b/g, "every $1 min"],
-    [/, tylko w godzinach/g, ", only between"], [/\(maks\. (\d+) wersji pliku\)/g, "(max. $1 versions of a file)"],
+    [/, tylko w godzinach/g, ", only between"], [/, jako jedna najnowsza kopia pliku/g, ", as a single latest copy of the file"], [/\(maks\. (\d+) wersji pliku\)/g, "(max. $1 versions of a file)"],
   ];
   // --- Ochrona danych użytkownika ---------------------------------------------------------------------
   // Nazwy zadań, ścieżki, nazwy plików i kont NIE są tłumaczone. Element (lub potomek elementu) z atrybutem data-nt
   // oraz znane kontenery danych są pomijane. PROT_IN: pomijany jest cały element i jego potomkowie; PROT_OWN: tylko
   // teksty bezpośrednio w elemencie (potomne <span class="kind"> itp. nadal są tłumaczone).
-  const PROT_IN = "[data-nt], .card .name, .loc .t span, .treerow span, #repBody td:nth-child(2), #repBody summary, " +
+  const PROT_IN = "[data-nt], .card .name, .loc .t span, .treerow span, #repBody summary, " +
     "#hist td:nth-child(2), #hist td:nth-child(4), #pending td:nth-child(2), #pending td[colspan='3'], #trashTbl td:first-child > b, " +
     "#remotes .grow > b, #summary li b, .cur, #histJob option:not([value='']), #trashJob option:not([value='']), select[data-remote] option:not([value=''])";
   const PROT_OWN = "#repBody .scroll div, #repBody details div";
