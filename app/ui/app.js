@@ -315,7 +315,7 @@ function showReport(title, r, id) {
       `<div class="pvwrap" id="pvScroll"><table class="pvt"><thead><tr><th class="pvc"></th><th>Akcja</th><th>Ścieżka</th><th class="pvs">Rozmiar</th></tr></thead><tbody id="pvBody"></tbody></table></div>` +
       `<p class="muted" id="pvEmpty" hidden>Brak pozycji pasujących do filtra.</p>` +
       `<p class="muted">Odznaczone pozycje zostaną pominięte. „Wykonaj zaznaczone” uruchamia synchronizację tylko z zaznaczonymi akcjami.</p>`;
-    pv = { id, off: new Set(), busy: false, rows: planned.map(([k, a, size]) => ({ k: String(k), a, size: typeof size === "number" ? size : null, from: (a && (a.RenameRight || a.RenameLeft))?.from ?? null, lc: (String(k) + " " + ACTION(a)).toLowerCase() })) };
+    pv = { id, off: new Set(), busy: false, rows: planned.map(([k, a, size]) => ({ k: String(k), a, size: typeof size === "number" ? size : (typeof (r.planned_sizes || {})[k] === "number" ? r.planned_sizes[k] : null), from: (a && (a.RenameRight || a.RenameLeft))?.from ?? null, lc: (String(k) + " " + ACTION(a)).toLowerCase() })) };
     pv.view = pv.rows;
     $("#repRun").hidden = false;
     $("#pvScroll").addEventListener("scroll", () => { if (pv.raf) return; pv.raf = requestAnimationFrame(() => { pv.raf = 0; pvRender(); }); });

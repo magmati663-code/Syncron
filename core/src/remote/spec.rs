@@ -129,9 +129,6 @@ pub fn remote_kinds() -> Vec<KindSpec> {
         ]
     };
     vec![
-        k("gdrive", "Google Drive", "Logowanie w przeglądarce.", true, oauth_fields()),
-        k("onedrive", "OneDrive / SharePoint", "Logowanie w przeglądarce.", true, oauth_fields()),
-        k("dropbox", "Dropbox", "Logowanie w przeglądarce.", true, oauth_fields()),
         k(
             "webdav",
             "WebDAV / Nextcloud",

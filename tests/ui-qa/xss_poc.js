@@ -21,6 +21,7 @@ const init = `
     overview: () => ({ paused: false, status: { [job.id]: { state: "error", error: XSS("staterr"), last: rep, progress: { done: 1, total: 2, current: XSS("cur") }, note: XSS("note") } } }),
     history: () => [{ ts: 1, job: job.id, kind: XSS("kind"), path: XSS("hpath"), detail: XSS("detail") }],
     list_remotes: () => [{ name: XSS("rname"), kind: XSS("rkind") }],
+    remote_kinds: () => [],
     trash_list: () => [{ side: "left", stamp: XSS("stamp"), path: XSS("tpath"), size: 1 }],
     list_dirs: () => [XSS("dir")],
     dry_run: () => rep,

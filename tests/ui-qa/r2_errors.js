@@ -7,7 +7,7 @@ const base = (extra) => (a) => {
   const S = window.__stub; S.jobs = a.jobs; S.status = {}; a.jobs.forEach((j) => (S.status[j.id] = a.st));
   S.history = [{ ts: 100, job: "job-1", kind: "kopiowanie →", path: "a.txt", detail: "" }];
   S.trash = [{ side: "left", stamp: "2025-01-02_030405", path: "a.txt", size: 1 }];
-  S.remotes = [{ name: "gdrive", kind: "drive" }];
+  S.remotes = [{ name: "webdav", kind: "webdav" }];
   S.settings = { notify: true, language: "pl", unavailable_minutes: 30 };
   (a.pre || []).forEach(([cmd, v]) => { S.fail[cmd] = v; });
   Object.assign(S.delay, a.delay || {});
@@ -122,14 +122,14 @@ const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.
   {
     const { browser, page } = await open([["add_remote", "Nazwa konta: min. 2 znaki"]]);
     await page.click("nav button[data-tab=accounts]"); await page.click('[data-p=sftp]');
-    await page.fill("#rName", "a"); await page.click("#rAdd"); await page.waitForTimeout(250);
+    await page.fill("#rName", "a"); await page.fill("#rFields [data-f=host]", "serwer.example.com"); await page.click("#rAdd"); await page.waitForTimeout(250);
     R.check("add_remote odrzucone -> komunikat 'Błąd: ...' i przycisk aktywny", /Błąd: Nazwa/.test(await page.textContent("#rMsg")) && !(await page.locator("#rAdd").isDisabled()));
     await browser.close();
   }
   // add_remote: ponowne użycie istniejącej nazwy (domyślnie 'gdrive') nie jest blokowane
   {
     const { browser, page } = await open();
-    await page.click("nav button[data-tab=accounts]"); await page.click('[data-p=drive]'); await page.waitForTimeout(100);
+    await page.click("nav button[data-tab=accounts]"); await page.click('[data-p=webdav]'); await page.waitForTimeout(100); await page.fill("#rFields [data-f=url]", "https://cloud.example.com/dav/");
     const name = await page.inputValue("#rName");
     await page.click("#rAdd"); await page.waitForTimeout(250);
     const c = (await page.evaluate(() => window.__stub.calls)).filter((x) => x.cmd === "add_remote");
@@ -140,7 +140,7 @@ const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.
   {
     const { browser, page } = await open();
     await page.click("nav button[data-tab=accounts]"); await page.click('[data-p=webdav]');
-    await page.fill('[data-f=pass]', "  tajne haslo  "); await page.fill('[data-f=url]', "https://x/"); await page.click("#rAdd"); await page.waitForTimeout(250);
+    await page.fill("#rName", "nowe"); await page.fill('[data-f=pass]', "  tajne haslo  "); await page.fill('[data-f=url]', "https://x/"); await page.click("#rAdd"); await page.waitForTimeout(250);
     const c = (await page.evaluate(() => window.__stub.calls)).filter((x) => x.cmd === "add_remote")[0];
     R.check("hasło konta wysyłane bez zmian (bez przycinania spacji)", c && c.args.params.pass === "  tajne haslo  ", `wysłano "${c && c.args.params.pass}"`);
     await browser.close();
@@ -149,9 +149,9 @@ const toastText = (page) => page.$$eval("#toasts .toast", (e) => e.map((x) => x.
   {
     const { browser, page } = await open([["test_remote", "timeout"], ["delete_remote", "nie można usunąć"]]);
     await page.click("nav button[data-tab=accounts]"); await page.waitForTimeout(200);
-    await page.click("[data-t=gdrive]"); await page.waitForTimeout(250);
-    R.check("test_remote odrzucone -> toast 'Błąd: timeout', przycisk 'Testuj' aktywny", (await toastText(page)).some((x) => /Błąd: timeout/.test(x)) && !(await page.locator("[data-t=gdrive]").isDisabled()));
-    await page.click("[data-d=gdrive]"); await page.click("#cfYes"); await page.waitForTimeout(250);
+    await page.click("[data-t=webdav]"); await page.waitForTimeout(250);
+    R.check("test_remote odrzucone -> komunikat 'timeout' przy koncie (lub toast), przycisk 'Testuj' aktywny", (/timeout/.test(await page.textContent("[data-rt=webdav]")) || (await toastText(page)).some((x) => /timeout/.test(x))) && !(await page.locator("[data-t=webdav]").isDisabled()));
+    await page.click("[data-d=webdav]"); await page.click("#cfYes"); await page.waitForTimeout(250);
     R.check("delete_remote odrzucone -> toast", (await toastText(page)).some((x) => /nie można usunąć/.test(x)));
     await browser.close();
   }
