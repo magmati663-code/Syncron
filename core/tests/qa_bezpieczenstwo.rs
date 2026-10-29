@@ -376,7 +376,12 @@ fn add_remote_waliduje_kind_i_klucze() {
 fn src_import_config_waliduje_i_nie_uruchamia_od_razu() {
     let s = repo_file("app/src-tauri/src/main.rs");
     let start = s.find("fn import_config").unwrap();
-    let body = &s[start..start + 900];
+    // cała funkcja: do następnego polecenia Tauri
+    let end = s[start..]
+        .find("#[tauri::command]")
+        .map(|i| start + i)
+        .unwrap_or(s.len());
+    let body = &s[start..end];
     assert!(
         body.contains("enabled = false") || body.contains("is_empty()"),
         "import przyjmuje dowolne `left`/`right` (np. \\\\serwer\\udział) i startuje zadanie bez potwierdzenia"
