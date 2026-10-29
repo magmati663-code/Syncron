@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "syncron-app"
-version = "0.7.0"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "syncron-cli"
-version = "0.7.0"
+version = "0.7.5"
 dependencies = [
  "chrono",
  "log",
@@ -3884,7 +3884,7 @@ dependencies = [
 
 [[package]]
 name = "syncron-core"
-version = "0.7.0"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "blake3",
