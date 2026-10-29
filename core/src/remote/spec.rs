@@ -99,15 +99,6 @@ fn k(kind: &str, label: &str, help: &str, oauth: bool, fields: Vec<FieldSpec>) -
     }
 }
 
-fn oauth_fields() -> Vec<FieldSpec> {
-    vec![f(
-        "client_id",
-        "Własny identyfikator klienta (Client ID)",
-        "text",
-    )
-    .help("Opcjonalnie. Zostaw puste, aby użyć domyślnej aplikacji Syncron.")]
-}
-
 /// Rodzaje kont dostępne w formularzu (kolejność = kolejność w UI).
 /// SMB nie jest kontem: użyj ścieżki sieciowej (UNC) lub zamontowanego udziału.
 pub fn remote_kinds() -> Vec<KindSpec> {
