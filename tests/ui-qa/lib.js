@@ -96,6 +96,36 @@ const STUB = `(() => {
     export_config: () => S.jobs.length, import_config: () => 0,
     open_logs_dir: () => null, get_diagnostics: () => "Syncron 0.7.0\\nZadania (1)\\n- „Kopia zapasowa”: ostatni przebieg: skopiowano 1",
   };
+  // ---- v08 E: raporty, powiadomienia, webhook (osobny blok) ----
+  Object.assign(H, {
+    report_summary: ({ filter }) => {
+      S.summaryFilters = (S.summaryFilters || []).concat([filter]);
+      return S.summary || { total: 6, runs: 3, copied: 4, deleted: 1, moved: 0, conflicts: 1, resolved: 0, errors: 2, warnings: 0, busy: 0, bytes_copied: 3 * 1048576, bytes_known_files: 4, first_ts: 1, last_ts: 2, top_errors: [{ message: "brak dostępu", count: 2 }], by_job: [] };
+    },
+    export_report: ({ format, path, filter }) => {
+      if (!["csv", "json", "html"].includes(format)) throw "Nieznany format raportu „" + format + "” (dostępne: csv, json, html).";
+      if (typeof path !== "string" || !path) throw "Podaj ścieżkę pliku docelowego raportu.";
+      S.exports = (S.exports || []).concat([{ format, path, filter }]);
+      return S.exportCount != null ? S.exportCount : 12;
+    },
+    test_webhook: ({ url, format, allowPrivate }) => {
+      if (!(url.startsWith("http://") || url.startsWith("https://"))) throw "Adres webhooka musi zaczynać się od http:// albo https://.";
+      if (!["Json", "Slack", "Discord", "Ntfy"].includes(format)) throw "Nieznany format webhooka (Json, Slack, Discord, Ntfy).";
+      S.webhookTests = (S.webhookTests || []).concat([{ url, format, allowPrivate }]);
+      return null;
+    },
+  });
+  const _saveJobE = H.save_job;
+  H.save_job = (a) => {
+    const j = a.job, bad = (m) => { throw "invalid args job for command save_job: " + m; };
+    for (const k of ["notify_on", "webhook_on"]) if (j[k] !== undefined && !["Never", "Errors", "Always"].includes(j[k])) bad("unknown variant " + j[k] + " (" + k + ")");
+    if (j.webhook_format !== undefined && !["Json", "Slack", "Discord", "Ntfy"].includes(j.webhook_format)) bad("unknown variant " + j.webhook_format + " (webhook_format)");
+    if (j.webhook_url != null && typeof j.webhook_url !== "string") bad("invalid type: webhook_url");
+    if (j.webhook_allow_private !== undefined && typeof j.webhook_allow_private !== "boolean") bad("invalid type: webhook_allow_private");
+    if (j.webhook_url && !(j.webhook_url.startsWith("http://") || j.webhook_url.startsWith("https://"))) throw "Adres webhooka musi zaczynać się od http:// albo https://.";
+    return _saveJobE(a);
+  };
+
   function mkJobStub(id, name) { return { id, name, left: "L", right: "R", mode: "TwoWay", no_delete_left: false, no_delete_right: false, only_add: false, conflict: "Newer", include: [], exclude: [], min_size: null, max_size: null, schedule: { type: "Manual" }, window: null, enabled: true, guard_pct: 25, trash_days: 30, threads: 4, use_vss: true, verify: false, max_versions: 0, conditions: { ac_only: false, wifi: [] }, bandwidth: { kbps: 0, off_kbps: 0, hours: null }, triggers: { on_drive: false, on_wake: false, on_network: false }, run_before: "rm -rf /", run_after: null }; }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   async function invoke(cmd, args) {

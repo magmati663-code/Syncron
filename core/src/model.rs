@@ -37,8 +37,31 @@ fn d_threads() -> usize {
 fn d_tol() -> u32 {
     2
 }
+fn d_never() -> NotifyOn {
+    NotifyOn::Never
+}
 fn d_timeout() -> u32 {
     300
+}
+
+/// Kiedy wysyłać powiadomienie (systemowe / webhook).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum NotifyOn {
+    Never,
+    /// Tylko gdy przebieg miał błędy, został zatrzymany albo są konflikty.
+    #[default]
+    Errors,
+    Always,
+}
+
+/// Format ładunku webhooka.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WebhookFormat {
+    #[default]
+    Json,
+    Slack,
+    Discord,
+    Ntfy,
 }
 
 /// Dowiązania symboliczne.
@@ -224,6 +247,20 @@ pub struct Job {
     /// Limit czasu poleceń przed/po (s), 1..=86400.
     #[serde(default = "d_timeout")]
     pub run_timeout_secs: u32,
+    // ---- 0.8: powiadomienia i webhook ----
+    /// Powiadomienia systemowe tego zadania (ustawienie globalne „wyłącz” nadal wygrywa).
+    #[serde(default)]
+    pub notify_on: NotifyOn,
+    /// Adres webhooka (http/https). Nigdy nie jest importowany; zawiera często token, więc nie trafia do logów.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    #[serde(default = "d_never")]
+    pub webhook_on: NotifyOn,
+    #[serde(default)]
+    pub webhook_format: WebhookFormat,
+    /// Zezwól na adresy lokalne i prywatne (np. ntfy w sieci domowej).
+    #[serde(default)]
+    pub webhook_allow_private: bool,
 }
 
 /// Znormalizowana lokalizacja do porównań: (nazwa konta zdalnego lub None, prefiks, komponenty).
@@ -417,6 +454,9 @@ impl Job {
                 }
             }
         }
+        if let Some(u) = &self.webhook_url {
+            crate::webhook::validate_url(u)?;
+        }
         match (self.mode, &self.custom) {
             (Mode::Custom, None) => {
                 return Err(
@@ -506,6 +546,7 @@ pub fn parse_import(text: &str) -> Result<Vec<Job>, String> {
         // polecenia z pliku od osoby trzeciej to wykonanie dowolnego kodu: nigdy nie są importowane
         j.run_before = None;
         j.run_after = None;
+        j.webhook_url = None;
         match out.iter().position(|x| x.id == j.id) {
             Some(p) => out[p] = j,
             None => out.push(j),

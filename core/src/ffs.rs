@@ -494,6 +494,7 @@ pub fn parse_ffs_named(xml: &str, stem: Option<&str>) -> Result<Vec<Job>, String
     base.enabled = false;
     base.run_before = None;
     base.run_after = None;
+    base.webhook_url = None;
     // bez dokładnych danych FreeFileSync domyślnie nie wykrywa przeniesień
     base.detect_moves = false;
     if let Some(c) = root.child("Compare") {

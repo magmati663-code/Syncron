@@ -604,6 +604,12 @@ struct Settings {
     /// Zarządzane wyłącznie przez backend (zapis przy zmianie okna); `set_settings` ignoruje wartość z interfejsu.
     #[serde(default)]
     window: Option<WinState>,
+    /// Ile dni trzymać historię w state.db (0 = bez rotacji).
+    #[serde(default = "d365")]
+    history_limit_days: u32,
+}
+fn d365() -> u32 {
+    syncron_core::report::DEFAULT_HISTORY_DAYS
 }
 fn d30() -> u32 {
     30
@@ -637,6 +643,7 @@ impl Default for Settings {
             high_contrast: false,
             theme: auto(),
             window: None,
+            history_limit_days: d365(),
         }
     }
 }
@@ -673,6 +680,12 @@ impl Settings {
         self.ui_scale = check_scale(self.ui_scale, 0.75, 2.0, "Skala interfejsu")?;
         self.font_scale = check_scale(self.font_scale, 0.85, 1.5, "Skala tekstu")?;
         self.unavailable_minutes = self.unavailable_minutes.min(10_080);
+        if self.history_limit_days > syncron_core::report::MAX_HISTORY_DAYS {
+            return Err(format!(
+                "Okres przechowywania historii: maksymalnie {} dni (0 = bez limitu).",
+                syncron_core::report::MAX_HISTORY_DAYS
+            ));
+        }
         Ok(())
     }
 
@@ -701,6 +714,9 @@ impl Settings {
         if !["auto", "light", "dark"].contains(&self.theme.as_str()) {
             self.theme = d.theme;
         }
+        self.history_limit_days = self
+            .history_limit_days
+            .min(syncron_core::report::MAX_HISTORY_DAYS);
         if let Some(w) = &self.window {
             if w.w < 200
                 || w.h < 150
@@ -892,6 +908,62 @@ fn import_freefilesync(path: String) -> Res<Vec<Job>> {
     syncron_core::ffs::read_ffs_file(std::path::Path::new(&path))
 }
 
+fn job_names(r: &Runner) -> HashMap<String, String> {
+    r.load_jobs().into_iter().map(|j| (j.id, j.name)).collect()
+}
+
+/// Eksport raportu z historii (csv / json / html) do wskazanego pliku. Zwraca liczbę wpisów.
+#[tauri::command]
+async fn export_report(
+    r: State<'_, Runner>,
+    format: String,
+    path: String,
+    filter: Option<syncron_core::report::Filter>,
+) -> Res<usize> {
+    let fmt = syncron_core::report::Format::parse(&format)?;
+    let (dir, names) = (r.state_dir().to_path_buf(), job_names(&r));
+    tauri::async_runtime::spawn_blocking(move || {
+        syncron_core::report::export(
+            &dir,
+            fmt,
+            &filter.unwrap_or_default(),
+            &names,
+            std::path::Path::new(&path),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Podsumowanie historii dla filtra (karty w zakładce „Aktywność”).
+#[tauri::command]
+async fn report_summary(
+    r: State<'_, Runner>,
+    filter: Option<syncron_core::report::Filter>,
+) -> Res<syncron_core::report::Summary> {
+    let (dir, names) = (r.state_dir().to_path_buf(), job_names(&r));
+    tauri::async_runtime::spawn_blocking(move || {
+        syncron_core::report::summary(&dir, &filter.unwrap_or_default(), &names)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Wysyła testowy webhook (format: Json | Slack | Discord | Ntfy). Błąd nie zawiera pełnego adresu.
+#[tauri::command]
+async fn test_webhook(url: String, format: String, allow_private: Option<bool>) -> Res<()> {
+    let fmt: syncron_core::model::WebhookFormat =
+        serde_json::from_value(serde_json::Value::String(format))
+            .map_err(|_| "Nieznany format webhooka (Json, Slack, Discord, Ntfy).".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        syncron_core::webhook::send_test(&url, fmt, allow_private.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Elementy menu zasobnika (tłumaczone zgodnie z `settings.language`).
 struct TrayMenu {
     show: MenuItem<tauri::Wry>,
@@ -925,6 +997,13 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
         let mut down: HashMap<String, (std::time::Instant, bool)> = HashMap::new();
         let mut last_state = String::new();
         let mut last_lang = String::new();
+        // czas ostatniego przebiegu widziany przez wątek (powiadomienia „Zawsze”)
+        let mut seen_run: HashMap<String, i64> = HashMap::new();
+        // rotacja historii przy starcie (best effort)
+        {
+            let r = app.state::<Runner>();
+            let _ = syncron_core::report::prune_now(r.state_dir());
+        }
         loop {
             std::thread::sleep(std::time::Duration::from_secs(4));
             let r = app.state::<Runner>();
@@ -958,11 +1037,11 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
                 let _ = tray.set_tooltip(Some(tip));
             }
             for (id, s) in r.status() {
-                let name = jobs
-                    .iter()
-                    .find(|j| j.id == id)
-                    .map(|j| j.name.clone())
-                    .unwrap_or(id.clone());
+                let jobcfg = jobs.iter().find(|j| j.id == id);
+                let name = jobcfg.map(|j| j.name.clone()).unwrap_or(id.clone());
+                // powiadomienia zadania: globalne wyłączenie w Ustawieniach wygrywa nad `notify_on`
+                let notify_on = jobcfg.map(|j| j.notify_on).unwrap_or_default();
+                let allow = st.notify && notify_on != syncron_core::model::NotifyOn::Never;
                 let conflicts = s.last.as_ref().map(|l| l.conflicts.len()).unwrap_or(0);
                 let say = |body: String| {
                     let _ = app
@@ -978,7 +1057,7 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
                         .or_insert((std::time::Instant::now(), false));
                     let limit =
                         std::time::Duration::from_secs(u64::from(st.unavailable_minutes) * 60);
-                    if st.notify && st.unavailable_minutes > 0 && !e.1 && e.0.elapsed() >= limit {
+                    if allow && st.unavailable_minutes > 0 && !e.1 && e.0.elapsed() >= limit {
                         e.1 = true;
                         log::warn!(
                             "zadanie „{name}” jest niedostępne od {} min",
@@ -999,7 +1078,7 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
                         });
                     }
                 } else if let Some((_, notified)) = down.remove(&id) {
-                    if notified && st.notify {
+                    if notified && allow {
                         log::info!("zadanie „{name}” znów działa");
                         say(if en {
                             "Back to normal.".to_string()
@@ -1009,10 +1088,15 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
                     }
                 }
                 let prev = seen.insert(id.clone(), (s.state.clone(), conflicts));
+                let prev_run = match s.last_run {
+                    Some(t) => seen_run.insert(id.clone(), t),
+                    None => None,
+                };
+                let new_run = s.last_run.is_some_and(|t| prev_run.is_some_and(|p| p != t));
                 let Some((pstate, pconf)) = prev else {
                     continue;
                 };
-                if !st.notify {
+                if !allow {
                     continue;
                 }
                 let msg = if s.state != pstate && s.state == "error" {
@@ -1032,6 +1116,27 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
                         format!("{conflicts} file(s) in conflict need a decision.")
                     } else {
                         format!("Konflikty do rozstrzygnięcia: {conflicts}.")
+                    })
+                } else if new_run && notify_on == syncron_core::model::NotifyOn::Always {
+                    // „Zawsze”: podsumowanie każdego zakończonego przebiegu
+                    s.last.as_ref().map(|l| {
+                        if en {
+                            format!(
+                                "Finished: copied {}, deleted {}, moved {}, errors {}.",
+                                l.copied,
+                                l.deleted,
+                                l.moved,
+                                l.errors.len()
+                            )
+                        } else {
+                            format!(
+                                "Zakończono: skopiowano {}, usunięto {}, przeniesiono {}, błędy {}.",
+                                l.copied,
+                                l.deleted,
+                                l.moved,
+                                l.errors.len()
+                            )
+                        }
                     })
                 } else {
                     None
@@ -1351,6 +1456,9 @@ fn main() {
             import_config,
             run_selected,
             import_freefilesync,
+            export_report,
+            report_summary,
+            test_webhook,
             restart_elevated,
             set_elevated_autostart
         ])
@@ -1393,6 +1501,19 @@ mod tests {
         assert!(s.window.is_none());
         let e: Settings = serde_json::from_str("{}").unwrap();
         assert!(e.notify && e.language == "pl");
+        assert_eq!(e.history_limit_days, 365);
+    }
+
+    #[test]
+    fn limit_historii_w_ustawieniach() {
+        let mut s: Settings = serde_json::from_str(r#"{"history_limit_days":30}"#).unwrap();
+        assert!(s.validate().is_ok() && s.history_limit_days == 30);
+        s.history_limit_days = 0; // bez rotacji
+        assert!(s.validate().is_ok());
+        s.history_limit_days = 99_999;
+        assert!(s.validate().is_err());
+        s.sanitize();
+        assert_eq!(s.history_limit_days, 36_500);
     }
 
     #[test]

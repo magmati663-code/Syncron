@@ -595,8 +595,23 @@ fn cmd_of(c: &Option<String>) -> Option<&str> {
     c.as_deref().map(str::trim).filter(|x| !x.is_empty())
 }
 
-/// Przebieg zadania z opcjami: polecenie przed (błąd ≠ 0 anuluje), właściwa synchronizacja, polecenie po.
+/// Przebieg zadania z opcjami: polecenie przed (błąd ≠ 0 anuluje), właściwa synchronizacja, polecenie po,
+/// a na końcu (poza symulacją) webhook. Błąd webhooka trafia do `Report.warnings`, nigdy do `errors`.
 pub fn run_job_opts(job: &Job, state_dir: &Path, o: RunOpts) -> anyhow::Result<Report> {
+    let (dry, t0) = (o.dry, std::time::Instant::now());
+    let mut res = run_job_hooks(job, state_dir, o);
+    if !dry && job.webhook_url.is_some() {
+        let ms = t0.elapsed().as_millis() as u64;
+        if let Some(w) = crate::webhook::notify_after_run(job, &res, ms) {
+            if let Ok(r) = &mut res {
+                r.warnings.push(w);
+            }
+        }
+    }
+    res
+}
+
+fn run_job_hooks(job: &Job, state_dir: &Path, o: RunOpts) -> anyhow::Result<Report> {
     job.validate_locations().map_err(|e| anyhow::anyhow!(e))?;
     let hooks = !o.dry;
     let mut before_msg = None;
@@ -881,7 +896,8 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
                     "INSERT OR REPLACE INTO base(job,key,lsize,lmtime,rsize,rmtime) VALUES(?1,?2,?3,?4,?5,?6)",
                     params![job.id, key, l.size as i64, l.mtime, r.size as i64, r.mtime],
                 )?;
-                hist(kind, &key, "")?;
+                // rozmiar skopiowanych danych trafia do szczegółów (raporty sumują „N B”)
+                hist(kind, &key, &format!("{} B", l.size))?;
             }
             Out::Moved { old, key, l, r } => {
                 rep.moved += 1;
@@ -949,7 +965,7 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
             _ => {}
         }
     }
-    tx.execute("DELETE FROM history WHERE ts < ?1", [ts - 90 * 86400])?;
+    crate::report::prune_history(&tx, ts, crate::report::history_limit_days(state_dir))?;
     tx.commit()?;
 
     rep.vss_note = opts.vss.note();
