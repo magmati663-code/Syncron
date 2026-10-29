@@ -3,10 +3,8 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use syncron_core::engine::{self, HistoryRow, Report, TrashItem};
-use syncron_core::location::{
-    rclone_config_path, rclone_obscure, remote_exists, run_rclone, set_remote_keys,
-    valid_param_key, REMOTE_KINDS,
-};
+use syncron_core::accounts::{self, AboutInfo, DirEntryInfo, ImportReport};
+use syncron_core::remote::spec::KindSpec;
 use syncron_core::model::Job;
 use syncron_core::runner::{Runner, Status};
 use syncron_core::vss;
@@ -137,8 +135,8 @@ fn overall_state(r: &Runner) -> (&'static str, [u8; 3]) {
 
 fn kind_of(loc: &str) -> String {
     match syncron_core::location::Location::parse(loc) {
-        syncron_core::location::Location::Rclone(s) => {
-            format!("chmura ({})", s.split(':').next().unwrap_or(""))
+        syncron_core::location::Location::Remote { account, .. } => {
+            format!("chmura ({account})")
         }
         syncron_core::location::Location::Local(_)
             if loc.starts_with("\\\\") || loc.starts_with("//") =>
@@ -185,14 +183,20 @@ fn redact_paths(text: &str) -> String {
 }
 
 /// Tekst diagnostyczny do wklejenia w zgłoszeniu: wersja, system, zadania i końcówka dziennika.
-/// Ścieżki w błędach i dzienniku są zastąpione `<ścieżka>`; nazwy zadań i kont rclone pozostają.
+/// Ścieżki w błędach i dzienniku są zastąpione `<ścieżka>`; nazwy zadań i kont zdalnych pozostają.
 #[tauri::command]
 async fn get_diagnostics(r: State<'_, Runner>) -> Res<String> {
     let runner = r.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut o = String::new();
         o += &format!("Syncron {}\nSystem: {} {}\n", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
-        o += &format!("rclone: {}\n", run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string()).unwrap_or_else(|e| format!("niedostępny ({})", redact_paths(&e))));
+        o += &format!(
+            "Konta zdalne: {}\n",
+            accounts::global()
+                .and_then(|st| st.list().ok())
+                .map(|v| v.len().to_string())
+                .unwrap_or_else(|| "niedostępne".into())
+        );
         o += &format!("VSS: obsługa={}, administrator={}\n", vss::supported(), vss::is_admin());
         let st = runner.status();
         let jobs = runner.load_jobs();
@@ -367,180 +371,126 @@ fn history(r: State<Runner>, job: Option<String>, limit: usize) -> Res<Vec<Histo
 struct Remote {
     name: String,
     kind: String,
+    /// Konto wymaga zalogowania (zaimportowane z rclone albo brakuje zapisanego hasła/tokenu).
+    needs_login: bool,
+    /// Tylko wartości jawne (hasła i tokeny nigdy nie opuszczają magazynu sekretów).
+    params: std::collections::BTreeMap<String, String>,
+}
+
+fn store() -> Res<std::sync::Arc<accounts::Store>> {
+    accounts::global().ok_or_else(|| "Magazyn kont nie jest gotowy.".to_string())
+}
+
+/// Wykonuje blokującą operację na kontach poza wątkiem interfejsu (sieć, klucze systemu).
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce(std::sync::Arc<accounts::Store>) -> Res<T> + Send + 'static,
+) -> Res<T> {
+    let st = store()?;
+    tauri::async_runtime::spawn_blocking(move || f(st))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Opis formularzy kont (rodzaje i pola) do dynamicznego budowania interfejsu.
+#[tauri::command]
+fn remote_kinds() -> Vec<KindSpec> {
+    syncron_core::remote::spec::kinds()
 }
 
 #[tauri::command]
 async fn list_remotes() -> Res<Vec<Remote>> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let out = run_rclone(&["listremotes", "--long"])?;
-        Ok(out
-            .lines()
-            .filter_map(|l| {
-                let (n, k) = l.split_once(':')?;
-                Some(Remote {
-                    name: n.trim().to_string(),
-                    kind: k.trim().to_string(),
-                })
+    blocking(|st| {
+        Ok(st
+            .list_view()?
+            .into_iter()
+            .map(|a| Remote {
+                name: a.name,
+                kind: a.kind,
+                needs_login: a.needs_login,
+                params: a.params,
             })
             .collect())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
-fn check_remote_name(name: &str) -> Res<()> {
-    if syncron_core::location::valid_remote_name(name) {
-        Ok(())
-    } else {
-        Err("Nazwa konta: min. 2 znaki, zaczyna się od litery lub cyfry; tylko litery ASCII, cyfry, _ i -."
-            .to_string())
-    }
-}
-
-/// Tworzy konto rclone. Pytania konfiguratora (np. wybór dysku OneDrive) są zatwierdzane wartościami domyślnymi;
-/// logowanie Google/Microsoft otwiera przeglądarkę. Sekrety (hasła, tokeny) nie trafiają do argumentów procesu:
-/// są zapisywane bezpośrednio w pliku konfiguracji rclone (hasła zaciemnione przez `rclone obscure -`).
+/// Tworzy konto natywne. Jawne pola trafiają do `accounts.json`, hasła i tokeny do magazynu sekretów
+/// (klucze systemu albo zaszyfrowany plik) — nigdy do argumentów procesów ani dziennika.
 #[tauri::command]
 async fn add_remote(name: String, kind: String, params: HashMap<String, String>) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        check_remote_name(&name)?;
-        if !kind.chars().all(|c| c.is_ascii_alphanumeric())
-            || !REMOTE_KINDS.contains(&kind.as_str())
-        {
-            return Err(format!("Nieobsługiwany rodzaj konta: „{kind}”."));
-        }
-        if let Some(k) = params.keys().find(|k| !valid_param_key(k)) {
-            return Err(format!("Niedozwolony parametr konta: „{k}”."));
-        }
-        if params.values().any(|v| v.contains(['\n', '\r'])) {
-            return Err("Wartości pól konta nie mogą zawierać znaków nowej linii.".to_string());
-        }
-        if remote_exists(&name)? {
-            return Err(format!(
-                "Konto „{name}” już istnieje. Wybierz inną nazwę albo najpierw usuń to konto."
-            ));
-        }
-        let result = create_remote(&name, &kind, &params);
-        if result.is_err() {
-            // nie zostawiaj częściowo utworzonego konta
-            let _ = run_rclone(&["config", "delete", "--", &name]);
-        }
-        result
+    blocking(move |st| {
+        st.add(&name, &kind, &params.into_iter().collect())
+            .map(|_| ())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
-fn is_secret_key(k: &str) -> bool {
-    let k = k.to_lowercase();
-    ["pass", "secret", "token", "key"]
-        .iter()
-        .any(|w| k.contains(w))
-}
-
-fn create_remote(name: &str, kind: &str, params: &HashMap<String, String>) -> Res<()> {
-    let (secret, plain): (Vec<_>, Vec<_>) = params
-        .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .partition(|(k, _)| is_secret_key(k));
-    let kv: Vec<String> = plain.iter().map(|(k, v)| k.to_string() + "=" + v).collect();
-    let mut out;
-    if secret.is_empty() {
-        let mut args: Vec<&str> = vec!["config", "create", "--non-interactive", "--obscure", "--"];
-        args.extend([name, kind]);
-        args.extend(kv.iter().map(|s| s.as_str()));
-        out = run_rclone(&args)?;
-    } else {
-        let mut keys = vec![("type".to_string(), kind.to_string())];
-        for (k, v) in &secret {
-            let v = if k.to_lowercase().contains("pass") {
-                rclone_obscure(v)?
-            } else {
-                v.to_string()
-            };
-            keys.push((k.to_string(), v));
-        }
-        set_remote_keys(&rclone_config_path()?, name, &keys)?;
-        let mut args: Vec<&str> = vec!["config", "update", "--non-interactive", "--obscure", "--"];
-        args.push(name);
-        args.extend(kv.iter().map(|s| s.as_str()));
-        out = run_rclone(&args)?;
-    }
-    for _ in 0..20 {
-        let v: serde_json::Value = serde_json::from_str(out.trim())
-            .map_err(|_| "Konfigurator rclone zwrócił nieoczekiwaną odpowiedź.".to_string())?;
-        if let Some(e) = v["Error"].as_str().filter(|e| !e.is_empty()) {
-            return Err(e.to_string());
-        }
-        let state = v["State"].as_str().unwrap_or("");
-        if state.is_empty() {
-            return Ok(());
-        }
-        let opt = &v["Option"];
-        if opt["IsPassword"].as_bool().unwrap_or(false) {
-            return Err(
-                "Konfigurator rclone wymaga podania hasła; uruchom `rclone config` ręcznie."
-                    .to_string(),
-            );
-        }
-        let mut answer = opt["Value"].as_str().unwrap_or("").to_string();
-        if answer.is_empty() {
-            answer = opt["DefaultStr"].as_str().unwrap_or("").to_string();
-        }
-        if answer.is_empty() {
-            answer = opt["Examples"][0]["Value"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-        }
-        out = run_rclone(&[
-            "config",
-            "update",
-            "--continue",
-            "--state",
-            state,
-            "--result",
-            &answer,
-            "--non-interactive",
-            "--",
-            name,
-        ])?;
-    }
-    Err("Konfigurator rclone nie zakończył się; uruchom `rclone config` ręcznie.".to_string())
+/// Zmienia konto: jawne pola są zastępowane, sekrety tylko gdy podano nową (niepustą) wartość.
+#[tauri::command]
+async fn update_remote(name: String, params: HashMap<String, String>) -> Res<()> {
+    blocking(move |st| st.update(&name, &params.into_iter().collect()).map(|_| ())).await
 }
 
 #[tauri::command]
 async fn delete_remote(name: String) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        check_remote_name(&name)?;
-        run_rclone(&["config", "delete", "--", &name]).map(|_| ())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move |st| st.delete(&name)).await
 }
 
+/// Test połączenia: zwraca opis z czasem odpowiedzi.
 #[tauri::command]
 async fn test_remote(name: String) -> Res<String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        check_remote_name(&name)?;
-        run_rclone(&[
-            "lsd",
-            "--max-depth",
-            "1",
-            "--contimeout",
-            "15s",
-            "--",
-            &format!("{name}:"),
-        ])
-        .map(|o| {
-            format!(
-                "Połączono. Folderów na najwyższym poziomie: {}",
-                o.lines().count()
-            )
-        })
+    blocking(move |st| {
+        let t = st.test(&name)?;
+        Ok(format!("Połączono ({} ms). {}", t.ms, t.info))
     })
     .await
-    .map_err(|e| e.to_string())?
+}
+
+/// Zawartość folderu na koncie (jeden poziom) do przeglądarki w kreatorze.
+#[tauri::command]
+async fn browse_remote(name: String, path: String) -> Res<Vec<DirEntryInfo>> {
+    blocking(move |st| st.browse(&name, &path)).await
+}
+
+/// Miejsce na koncie (jeśli serwer je podaje).
+#[tauri::command]
+async fn remote_about(name: String) -> Res<AboutInfo> {
+    blocking(move |st| st.about(&name)).await
+}
+
+/// Stary `rclone.conf` w folderze danych, który można zaimportować (aplikacja proponuje import).
+#[tauri::command]
+fn rclone_import_offer() -> Option<String> {
+    let st = accounts::global()?;
+    accounts::pending_rclone_import(st.dir()).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Użytkownik odrzucił propozycję importu.
+#[tauri::command]
+fn rclone_import_dismiss() {
+    if let Some(st) = accounts::global() {
+        accounts::dismiss_rclone_import(st.dir());
+    }
+}
+
+/// Import kont z `rclone.conf` (domyślnie z folderu danych). `remove_source` usuwa plik po imporcie bez błędów.
+#[tauri::command]
+async fn import_rclone_conf(
+    path: Option<String>,
+    remove_source: Option<bool>,
+) -> Res<ImportReport> {
+    blocking(move |st| {
+        let p = match path {
+            Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+            _ => st.dir().join("rclone.conf"),
+        };
+        let mut rep = st.import_rclone_conf(&p)?;
+        if remove_source.unwrap_or(false) && rep.skipped.is_empty() {
+            rep.source_removed = st.remove_rclone_source(&p).is_ok();
+        }
+        Ok(rep)
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -910,27 +860,6 @@ fn spawn_notifier(app: tauri::AppHandle, tray: tauri::tray::TrayIcon, menu: Tray
     });
 }
 
-#[tauri::command]
-fn rclone_version() -> Res<String> {
-    run_rclone(&["version"]).map(|s| s.lines().next().unwrap_or("").to_string())
-}
-
-fn locate_rclone(app: &tauri::AppHandle) {
-    let exe = if cfg!(windows) {
-        "rclone.exe"
-    } else {
-        "rclone"
-    };
-    if let Ok(dir) = app.path().resource_dir() {
-        for p in [dir.join("bin").join(exe), dir.join(exe)] {
-            if p.is_file() {
-                std::env::set_var("SYNCRON_RCLONE", &p);
-                break;
-            }
-        }
-    }
-}
-
 /// Dopasowuje rozmiar okna do dostępnego obszaru ekranu (bez paska zadań): na niskich ekranach okno
 /// o stałej wysokości wystawało poza ekran i ucinało stopkę z przyciskami kreatora.
 fn fit_window(w: &tauri::WebviewWindow) {
@@ -977,9 +906,8 @@ fn main() {
             std::fs::create_dir_all(&dir)?;
             syncron_core::legacy::migrate_data_dir(&dir); // dane z czasów SyncPolak
             init_logging(&dir);
-            // własna konfiguracja rclone w folderze danych aplikacji
-            std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
-            locate_rclone(app.handle());
+            // konta zdalnych magazynów (accounts.json + sekrety) w folderze danych aplikacji
+            accounts::set_data_dir(&dir);
             vss::set_data_dir(&dir); // rejestr migawek i kopie tymczasowe w prywatnym katalogu danych
             vss::cleanup_stale(); // migawki pozostawione po awarii
             let runner = Runner::new(dir);
@@ -1052,8 +980,14 @@ fn main() {
             list_remotes,
             add_remote,
             delete_remote,
+            update_remote,
             test_remote,
-            rclone_version,
+            browse_remote,
+            remote_about,
+            remote_kinds,
+            import_rclone_conf,
+            rclone_import_offer,
+            rclone_import_dismiss,
             vss_status,
             get_settings,
             set_settings,

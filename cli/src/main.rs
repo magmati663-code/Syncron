@@ -18,6 +18,10 @@ POLECENIA:
   run <nazwa|id> [--dry-run] [--force]
                                 uruchom zadanie raz (--dry-run: tylko symulacja, --force: pomiń zabezpieczenia)
   daemon                        działaj w tle i uruchamiaj zadania według harmonogramów (Ctrl+C: koniec)
+  accounts list                 pokaż konta zdalnych magazynów (bez haseł)
+  accounts test <nazwa>         sprawdź połączenie z kontem (czas odpowiedzi)
+  accounts delete <nazwa>       usuń konto razem z zapisanymi hasłami
+  accounts import-rclone [plik] zaimportuj konta ze starego pliku rclone.conf (domyślnie z folderu danych)
   export <plik.json>            zapisz zadania do pliku
   import <plik.json>            wczytaj zadania z pliku
   service install [--boot]      zainstaluj usługę w tle (domyślnie przy logowaniu; --boot: przy starcie systemu, Windows, wymaga administratora)
@@ -336,9 +340,76 @@ fn check_opts(rest: &[String], allowed: &[&str]) -> Result<(), String> {
     }
 }
 
-const COMMANDS: [&str; 8] = [
-    "list", "run", "daemon", "export", "import", "service", "version", "help",
+const COMMANDS: [&str; 9] = [
+    "list", "run", "daemon", "export", "import", "service", "accounts", "version", "help",
 ];
+
+/// `syncron accounts ...`: zarządzanie kontami zdalnych magazynów.
+fn accounts_cmd(rest: &[String], dir: &Path) -> Result<(), String> {
+    use syncron_core::accounts;
+    check_opts(rest, &[])?;
+    let store = accounts::global().ok_or("katalog kont nie jest ustawiony")?;
+    match rest.first().map(String::as_str) {
+        Some("list") | None => {
+            let v = store.list_view()?;
+            if v.is_empty() {
+                println!("Brak kont (folder danych: {}).", dir.display());
+            }
+            for a in v {
+                println!(
+                    "{}  [{}]{}",
+                    clean(&a.name),
+                    clean(&a.kind),
+                    if a.needs_login {
+                        "  wymaga zalogowania"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            Ok(())
+        }
+        Some("test") => {
+            let name = rest.get(1).ok_or("podaj nazwę konta")?;
+            let t = store.test(name)?;
+            println!("Połączono z kontem {} w {} ms: {}", clean(name), t.ms, clean(&t.info));
+            Ok(())
+        }
+        Some("delete") => {
+            let name = rest.get(1).ok_or("podaj nazwę konta")?;
+            store.delete(name)?;
+            println!("Usunięto konto {}.", clean(name));
+            Ok(())
+        }
+        Some("import-rclone") => {
+            let path = match rest.get(1) {
+                Some(f) => PathBuf::from(f),
+                None => dir.join("rclone.conf"),
+            };
+            let r = store.import_rclone_conf(&path)?;
+            for n in &r.imported {
+                println!("Zaimportowano konto: {}", clean(n));
+            }
+            for n in &r.needs_login {
+                println!(
+                    "Utworzono konto wymagające ponownego zalogowania: {}",
+                    clean(n)
+                );
+            }
+            for s in &r.skipped {
+                println!("Pominięto {}: {}", clean(&s.name), clean(&s.reason));
+            }
+            for w in &r.warnings {
+                println!("Uwaga: {}", clean(w));
+            }
+            Ok(())
+        }
+        Some(other) => Err(format!(
+            "nieznane polecenie kont „{}” (syncron help)",
+            clean(other)
+        )),
+    }
+}
 
 /// Czyta plik JSON (UTF-8, z opcjonalnym BOM) do tekstu.
 fn read_json_file(f: &str) -> Result<String, String> {
@@ -370,8 +441,8 @@ fn real_main() -> Result<ExitCode, String> {
         dir = PathBuf::from(v);
     }
     syncron_core::legacy::migrate_data_dir(&dir);
-    // jak w aplikacji okienkowej: własna konfiguracja rclone w folderze danych
-    std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));
+    // jak w aplikacji okienkowej: konta zdalne (accounts.json, sekrety) w folderze danych
+    syncron_core::accounts::set_data_dir(&dir);
     let runner = Runner::new(dir.clone());
     let cmd = args
         .first()
@@ -534,6 +605,7 @@ fn real_main() -> Result<ExitCode, String> {
             })?;
             println!("Zaimportowano zadań: {imported}");
         }
+        "accounts" => accounts_cmd(rest, &dir)?,
         "service" => service(rest, &dir)?,
         other => {
             return Err(format!(
