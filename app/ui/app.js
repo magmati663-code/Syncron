@@ -741,7 +741,7 @@ $("#trashEmpty").onclick = async () => {
 // ---------- ustawienia: powiadomienia, język, aktualizacje, kopia ----------
 (async () => {
   let st = { notify: true, language: LANG, unavailable_minutes: 30 }, ok = true;
-  try { st = await invoke("get_settings"); }
+  try { st = await invoke("get_settings"); if (window.SyncronScale) SyncronScale.init(st); }
   catch (e) {
     ok = false; toast("Nie udało się wczytać ustawień — widoczne wartości są domyślne i nie zostaną zapisane: " + errText(e, "błąd odczytu"), "bad");
     $$("#notify,#unavail").forEach((i) => (i.disabled = true));
@@ -757,7 +757,7 @@ $("#trashEmpty").onclick = async () => {
   $("#unavail").value = lastUnavail;
   const save = async () => {
     if (!ok) return false;
-    try { await invoke("set_settings", { settings: { notify: $("#notify").checked, language: $("input[name=lang]:checked").value, unavailable_minutes: lastUnavail } }); return true; }
+    try { const ns = Object.assign({}, window.SyncronScale ? SyncronScale.raw() : {}, { notify: $("#notify").checked, language: $("input[name=lang]:checked").value, unavailable_minutes: lastUnavail }); await invoke("set_settings", { settings: ns }); if (window.SyncronScale) SyncronScale.adopt(ns); return true; }
     catch (e) { toast(errText(e), "bad"); return false; }
   };
   $("#notify").onchange = save;

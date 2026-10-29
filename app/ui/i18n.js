@@ -32,6 +32,16 @@
     "Po kliknięciu „Połącz konto” otworzy się przeglądarka z logowaniem — dokończ je tam.": "After clicking “Connect account” a browser window opens for sign-in — finish it there.",
     "Zapisz hasła w bezpiecznym miejscu — bez nich zaszyfrowanych danych nie da się odzyskać. Konto-źródło musi już istnieć (np. gdrive:Szyfrowane).": "Store the passwords safely — encrypted data cannot be recovered without them. The underlying account must already exist (e.g. gdrive:Encrypted).",
     "Konto dodane": "Account added", "Usunąć konto?": "Delete account?",
+    // wygląd i skalowanie (v0.8)
+    "Wygląd i skalowanie": "Appearance and scaling", "Skala interfejsu": "Interface scale", "Zmniejsz skalę": "Decrease scale", "Zwiększ skalę": "Increase scale",
+    "Rozmiar tekstu": "Text size", "Gęstość": "Density", "Zwarta": "Compact", "Więcej treści na ekranie": "More content on screen",
+    "Normalna": "Normal", "Domyślny odstęp": "Default spacing", "Wygodna": "Comfortable", "Większe cele dotykowe": "Larger touch targets",
+    "Pasek boczny": "Sidebar", "Zwija się w wąskim oknie": "Collapses in a narrow window", "Rozwinięty": "Expanded", "Zawsze z nazwami": "Always with labels",
+    "Zwinięty": "Collapsed", "Same ikony": "Icons only", "Ogranicz animacje": "Reduce motion",
+    "Wyłącza przejścia i pulsowanie (preferencja systemu „zmniejsz ruch” też jest respektowana).": "Turns off transitions and pulsing (the system “reduce motion” preference is honored too).",
+    "Wysoki kontrast": "High contrast", "Mocniejsze obramowania i wyraźniejsze kolory tekstu.": "Stronger borders and clearer text colors.",
+    "Przywróć domyślne": "Restore defaults", "Skróty:": "Shortcuts:", "powiększa,": "zooms in,", "pomniejsza,": "zooms out,", "przywraca 100%,": "resets to 100%,",
+    "+ kółko myszy zmienia skalę.": "+ mouse wheel changes the scale.",
     // ustawienia
     "Motyw": "Theme", "Automatyczny": "Automatic", "Jak system": "Like the system", "Jasny": "Light", "Zawsze jasny": "Always light", "Ciemny": "Dark", "Zawsze ciemny": "Always dark",
     "Uruchamiaj razem z systemem": "Start with the system", "Aplikacja startuje w tle, w zasobniku systemowym.": "The app starts in the background, in the system tray.",
