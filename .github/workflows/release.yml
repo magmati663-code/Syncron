@@ -11,9 +11,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, target: "", rclone: windows-amd64 }
-          - { os: macos-latest, target: aarch64-apple-darwin, rclone: osx-arm64 }
-          - { os: macos-latest, target: x86_64-apple-darwin, rclone: osx-amd64 }
+          - { os: windows-latest, target: "", suffix: windows-amd64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, suffix: osx-arm64 }
+          - { os: macos-latest, target: x86_64-apple-darwin, suffix: osx-amd64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,20 +24,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: rclone (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest "https://downloads.rclone.org/rclone-current-windows-amd64.zip" -OutFile r.zip
-          Expand-Archive r.zip -DestinationPath rc
-          Copy-Item (Get-ChildItem rc -Recurse -Filter rclone.exe | Select-Object -First 1).FullName app/src-tauri/bin/rclone.exe
-      - name: rclone (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          curl -fsSL "https://downloads.rclone.org/rclone-current-${{ matrix.rclone }}.zip" -o r.zip
-          unzip -q r.zip -d rc
-          cp "$(find rc -name rclone -type f | head -1)" app/src-tauri/bin/rclone
-          chmod +x app/src-tauri/bin/rclone
       - name: Podpis Windows (certyfikat z sekretów, jeśli podano)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -96,7 +82,7 @@ jobs:
           if [ -n "$T" ]; then cargo build -p syncron-cli --release --target "$T"; SRC="target/$T/release/syncron"; else cargo build -p syncron-cli --release; SRC="target/release/syncron"; fi
           EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           cp "$SRC$EXT" "app/src-tauri/bin/syncron$EXT"
-          mkdir -p cli-out && cp "$SRC$EXT" "cli-out/syncron-cli-${{ matrix.rclone }}$EXT"
+          mkdir -p cli-out && cp "$SRC$EXT" "cli-out/syncron-cli-${{ matrix.suffix }}$EXT"
       - name: Zależności Node (Tauri CLI)
         working-directory: app
         run: npm install

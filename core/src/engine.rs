@@ -1,6 +1,6 @@
 //! Silnik: skan obu stron, planowanie, wykonanie równoległe, zapis stanu (SQLite) i historii.
 use crate::location::Opts;
-use crate::location::{hashes_equal, Entry, Location, OpError, ScanOpts};
+use crate::location::{hashes_equal, hashes_equal_local, Entry, Location, OpError, ScanOpts};
 use crate::model::{Job, Symlinks, Versioning};
 use crate::names;
 use crate::plan::{mass_delete_guard, plan_ext, same_c, Action, Cmp, Compare, Meta, Mode, Tree};
@@ -202,15 +202,13 @@ struct Ctx<'a> {
     o: &'a Opts,
 }
 
-/// Skrót BLAKE3 pliku lokalnego (strumieniowo); None dla rclone lub gdy nie da się odczytać.
+/// Skrót BLAKE3 pliku lokalnego (strumieniowo); None dla zdalnych lub gdy nie da się odczytać.
 fn local_hash(loc: &Location, rel: &str) -> Option<[u8; 32]> {
-    let Location::Local(p) = loc else {
-        return None;
-    };
-    let mut f = std::fs::File::open(crate::location::local_full(p, rel)).ok()?;
-    let mut h = blake3::Hasher::new();
-    std::io::copy(&mut f, &mut h).ok()?;
-    Some(*h.finalize().as_bytes())
+    if loc.is_local() {
+        loc.content_hash(rel)
+    } else {
+        None
+    }
 }
 
 /// Jedna strona synchronizacji: lokalizacja i jej wpisy ze skanu.
@@ -222,7 +220,7 @@ struct Side<'a> {
 /// Para „usunięty plik + nowy plik o tym samym rozmiarze i czasie” to przeniesienie: po stronie docelowej
 /// wystarczy zmienić ścieżkę zamiast kopiować od nowa. Samo dopasowanie rozmiaru i czasu nie wystarcza
 /// (rozpakowane archiwum zachowuje czasy): przeniesienie wykonujemy tylko, gdy treść się zgadza
-/// (hash BLAKE3, gdy obie strony są lokalne). Dla rclone nie zgadujemy: zwykłe kopiowanie + usunięcie.
+/// (hash BLAKE3, gdy obie strony są lokalne). Dla zdalnych: tylko gdy oba końce podają ten sam skrót i rozmiar; inaczej kopiowanie + usunięcie.
 /// Dopasowanie jest n log n: kandydaci posortowani wg (rozmiar, mtime), zakresy przez bisekcję.
 fn detect_moves(
     actions: &mut BTreeMap<String, Action>,
@@ -283,8 +281,11 @@ fn detect_moves(
             let (Some(se), Some(de)) = (src.entries.get(nk), dst.entries.get(ok)) else {
                 continue;
             };
-            // treść musi się zgadzać; bez możliwości sprawdzenia (rclone) nie zgadujemy
-            match (local_hash(src.loc, &se.real), local_hash(dst.loc, &de.real)) {
+            // treść musi się zgadzać; bez możliwości sprawdzenia nie zgadujemy
+            match (
+                src.loc.content_hash(&se.real),
+                dst.loc.content_hash(&de.real),
+            ) {
                 (Some(a), Some(b)) if a == b => moves.push((nk.clone(), ok.clone())),
                 _ => {}
             }
@@ -382,13 +383,18 @@ fn copy_one(
 }
 
 /// Weryfikacja przed usunięciem: plik „zniknął” po stronie `other`, ale mógł tylko wypaść ze skanu
-/// (reguła rozmiaru/maski, symlink, błędny rozmiar z rclone). Sprawdzamy go bezpośrednio, bez filtrów.
+/// (reguła rozmiaru/maski, symlink, błędny rozmiar ze zdalnego listingu). Sprawdzamy go bezpośrednio, bez filtrów.
 fn survives(other: &Location, real: &str, side: &str) -> Option<String> {
-    other.stat(real).map(|_| {
-        format!(
+    match other.stat_checked(real) {
+        Ok(None) => None,
+        Ok(Some(_)) => Some(format!(
             "ostrzeżenie: {real}: plik nadal istnieje po stronie {side}, choć nie został wykryty przy skanowaniu (reguły, dowiązanie lub błąd listowania) - pominięto usunięcie"
-        )
-    })
+        )),
+        // nie wiadomo, czy plik istnieje (błąd sieci/logowania): nie usuwamy
+        Err(e) => Some(format!(
+            "ostrzeżenie: {real}: nie można sprawdzić pliku po stronie {side} ({e}) - pominięto usunięcie"
+        )),
+    }
 }
 
 fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
@@ -646,7 +652,7 @@ fn scan_opts(job: &Job) -> ScanOpts {
 }
 
 /// Porównanie zawartości (`compare = Content`): pliki o tym samym rozmiarze, lecz różnych czasach, uznajemy za takie same,
-/// gdy zgadza się BLAKE3 (obie strony lokalne) albo skrót backendu (rclone, wspólny typ skrótu). W takim przypadku
+/// gdy zgadza się BLAKE3 (obie strony lokalne) albo skrót backendu zdalnego (wspólny typ skrótu albo ten sam algorytm liczony lokalnie). W takim przypadku
 /// czas prawej strony w drzewie planu zrównujemy z lewą. Bez możliwości sprawdzenia zostaje porównanie czas + rozmiar.
 fn equalize_by_content(
     (l, r): (&Location, &Location),
@@ -663,7 +669,13 @@ fn equalize_by_content(
         }
         let eq = match (local_hash(l, &le.real), local_hash(r, &re.real)) {
             (Some(a), Some(b)) => a == b,
-            _ => hashes_equal(&le.hashes, &re.hashes) == Some(true),
+            _ => match hashes_equal(&le.hashes, &re.hashes) {
+                Some(b) => b,
+                None => {
+                    hashes_equal_local(l, &le.real, &re.hashes) == Some(true)
+                        || hashes_equal_local(r, &re.real, &le.hashes) == Some(true)
+                }
+            },
         };
         if eq {
             if let Some(x) = rt.get_mut(k) {

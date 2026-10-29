@@ -118,26 +118,6 @@ impl Bandwidth {
             hours: self.hours,
         }
     }
-
-    /// Wartość dla `rclone --bwlimit` (np. `512k` albo rozkład godzinowy `08:00,512k 18:00,off`).
-    pub fn rclone_arg(&self) -> Option<String> {
-        let k = |v: u32| {
-            if v == 0 {
-                "off".to_string()
-            } else {
-                format!("{v}k")
-            }
-        };
-        match self.hours {
-            _ if self.kbps == 0 && self.off_kbps == 0 => None,
-            None => (self.kbps > 0).then(|| k(self.kbps)),
-            Some([a, b]) => Some(format!(
-                "{a:02}:00,{} {b:02}:00,{}",
-                k(self.kbps),
-                k(self.off_kbps)
-            )),
-        }
-    }
 }
 
 /// Dodatkowe wyzwalacze uruchamiania (poza harmonogramem).
@@ -158,7 +138,7 @@ pub struct Triggers {
 pub struct Job {
     pub id: String,
     pub name: String,
-    /// Ścieżka lokalna/UNC albo `remote:ścieżka` (rclone: Google Drive, OneDrive, Bitrix24 WebDAV...).
+    /// Ścieżka lokalna/UNC albo `konto:ścieżka` (konto zdalne: WebDAV, FTP, SFTP, S3, Google Drive, OneDrive, Dropbox...).
     pub left: String,
     pub right: String,
     pub mode: Mode,
@@ -246,7 +226,7 @@ pub struct Job {
     pub run_timeout_secs: u32,
 }
 
-/// Znormalizowana lokalizacja do porównań: (nazwa konta rclone lub None, prefiks, komponenty).
+/// Znormalizowana lokalizacja do porównań: (nazwa konta zdalnego lub None, prefiks, komponenty).
 type Norm = (Option<String>, String, Vec<String>);
 
 /// Normalizacja leksykalna (bez dotykania dysku): separatory, końcowe `/`, `.`/`..`, wielkość liter (Windows/macOS).
@@ -255,8 +235,11 @@ fn normalize_location(s: &str, ci: bool) -> Norm {
     let fold = |x: &str| if ci { x.to_lowercase() } else { x.to_string() };
     let s = s.trim();
     match Location::parse(s) {
-        Location::Rclone(full) => {
-            let (name, rest) = full.split_once(':').unwrap_or((&full, ""));
+        Location::Remote {
+            account: name,
+            root: rest,
+        } => {
+            let rest = rest.as_str();
             let mut c: Vec<String> = Vec::new();
             for part in rest.split('/') {
                 match part {
@@ -543,17 +526,6 @@ mod tests {
             off_kbps: 0,
             hours: Some([8, 18]),
         };
-        assert_eq!(b.rclone_arg().unwrap(), "08:00,800k 18:00,off");
-        assert_eq!(
-            Bandwidth {
-                kbps: 500,
-                ..Default::default()
-            }
-            .rclone_arg()
-            .unwrap(),
-            "500k"
-        );
-        assert!(Bandwidth::default().rclone_arg().is_none());
         assert_eq!(b.split(4).kbps, 200);
         assert_eq!(
             Bandwidth {

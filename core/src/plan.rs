@@ -25,7 +25,7 @@ pub enum Compare {
     TimeAndSize,
     /// Tylko rozmiar.
     SizeOnly,
-    /// Zawartość: BLAKE3 (lokalne) albo hash backendu rclone; bez możliwości sprawdzenia: czas i rozmiar.
+    /// Zawartość: BLAKE3 (lokalne) albo hash backendu zdalnego; bez możliwości sprawdzenia: czas i rozmiar.
     Content,
 }
 

@@ -26,6 +26,13 @@ quick-xml = "0.42"
 # WebDAV jest napisany pod API 0.37 (do ujednolicenia z S3 w przyszłości)
 quick-xml-037 = { package = "quick-xml", version = "0.37" }
 ring = "0.17"
+chacha20poly1305 = "0.10"
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+aes = "0.8"
+ctr = "0.9"
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

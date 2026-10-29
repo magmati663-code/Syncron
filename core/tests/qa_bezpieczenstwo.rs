@@ -6,7 +6,6 @@
 //! (main.rs aplikacji, CLI) i nie da się jej wywołać z testu na Linuksie.
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use syncron_core::engine::{self, run_job};
 use syncron_core::location::Location;
 use syncron_core::model::Job;
@@ -179,79 +178,56 @@ fn zapis_nie_podaza_za_symlinkiem_w_folderze_docelowym() {
 }
 
 // ======================================================================
-// 3. Ścieżki względne ze zdalnego listingu (fałszywy rclone)
+// 3. Ścieżki względne ze zdalnego listingu (backend w pamięci z „złośliwym” serwerem)
 // ======================================================================
 
-#[allow(dead_code)]
-static FAKE: Mutex<()> = Mutex::new(());
+mod common;
 
-/// Fałszywy `rclone`: `lsjson` zwraca JSON z pliku, `copyto` zapisuje plik w miejscu docelowym i loguje argumenty.
-#[cfg(unix)]
-fn with_fake_rclone(json: &str, f: impl FnOnce(&Path, &Path, &Path)) {
-    use std::os::unix::fs::PermissionsExt;
-    let _g = FAKE.lock().unwrap_or_else(|e| e.into_inner());
+/// Zdalne konto w pamięci z podanymi wpisami (klucze surowe: także `../x` i `/abs`); pobranie do `l`.
+fn pobierz_ze_zdalnego(entries: &[&str], f: impl FnOnce(&Path, &Path)) {
     let (t, l, _r, s) = dirs();
-    let bin = t.path().join("fake-rclone.sh");
-    fs::write(
-        &bin,
-        "#!/bin/sh\necho \"$@\" >> \"$FAKE_LOG\"\ncase \"$1\" in\n lsjson) cat \"$FAKE_JSON\";;\n copyto) mkdir -p \"$(dirname \"$3\")\"; echo z-serwera > \"$3\";;\n cat) exit 1;;\n *) ;;\nesac\n",
-    )
-    .unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
-    let jf = t.path().join("list.json");
-    fs::write(&jf, json).unwrap();
-    std::env::set_var("SYNCRON_RCLONE", &bin);
-    std::env::set_var("FAKE_JSON", &jf);
-    std::env::set_var("FAKE_LOG", t.path().join("rclone.log"));
-    f(t.path(), &l, &s);
-    std::env::remove_var("SYNCRON_RCLONE");
+    let cloud = common::Mem::new("zlosl");
+    for e in entries {
+        cloud.put(e, "z-serwera", 1_700_000_000);
+    }
+    let j = job_id("rc", &l, &cloud.spec(""), "RightToLeft");
+    let rep = run_job(&j, &s, false, false).unwrap();
+    let _ = rep;
+    f(t.path(), &l);
 }
 
-#[cfg(unix)]
-fn pobierz_ze_zdalnego(t: &Path, l: &Path, s: &Path) {
-    let j = job_id("rc", l, "fake:", "RightToLeft");
-    let rep = run_job(&j, s, false, false).unwrap();
-    let _ = (t, rep);
-}
-
-#[cfg(unix)]
 #[test]
 fn kontrola_harnessu_zwykla_sciezka_trafia_do_korzenia() {
-    let json = r#"[{"Path":"ok.txt","Size":9,"ModTime":"2026-10-27T10:00:00Z","IsDir":false}]"#;
-    with_fake_rclone(json, |t, l, s| {
-        pobierz_ze_zdalnego(t, l, s);
+    pobierz_ze_zdalnego(&["ok.txt"], |_t, l| {
         assert!(l.join("ok.txt").exists(), "harness działa");
     });
 }
 
-#[cfg(unix)]
 #[test]
-fn sciezka_bezwzgledna_ze_zdalnego_trafia_do_korzenia() {
-    let json =
-        r#"[{"Path":"/abs_zdalny/x.txt","Size":9,"ModTime":"2026-10-27T10:00:00Z","IsDir":false}]"#;
-    with_fake_rclone(json, |t, l, s| {
-        pobierz_ze_zdalnego(t, l, s);
+fn sciezka_bezwzgledna_ze_zdalnego_jest_odrzucana() {
+    pobierz_ze_zdalnego(&["/abs_zdalny/x.txt", "ok.txt"], |t, l| {
         assert!(!Path::new("/abs_zdalny/x.txt").exists());
-        assert!(l.join("abs_zdalny/x.txt").exists(), "{:?}", t);
+        assert!(!l.join("abs_zdalny/x.txt").exists(), "{:?}", t);
+        assert!(l.join("ok.txt").exists());
     });
 }
 
-#[cfg(unix)]
 #[test]
 fn zdalny_listing_z_dotdot_nie_zapisuje_poza_korzeniem() {
-    let json = r#"[{"Path":"../escape.txt","Size":9,"ModTime":"2026-10-27T10:00:00Z","IsDir":false},
-                   {"Path":"a/../../escape2.txt","Size":9,"ModTime":"2026-10-27T10:00:00Z","IsDir":false}]"#;
-    with_fake_rclone(json, |t, l, s| {
-        pobierz_ze_zdalnego(t, l, s);
-        assert!(
-            !t.join("escape.txt").exists(),
-            "zapis poza L (../escape.txt)"
-        );
-        assert!(
-            !t.join("escape2.txt").exists(),
-            "zapis poza L (a/../../escape2.txt)"
-        );
-    });
+    pobierz_ze_zdalnego(
+        &["../escape.txt", "a/../../escape2.txt", "ok.txt"],
+        |t, l| {
+            assert!(
+                !t.join("escape.txt").exists(),
+                "zapis poza L (../escape.txt)"
+            );
+            assert!(
+                !t.join("escape2.txt").exists(),
+                "zapis poza L (a/../../escape2.txt)"
+            );
+            assert!(l.join("ok.txt").exists());
+        },
+    );
 }
 
 #[cfg(unix)]
@@ -359,28 +335,41 @@ fn src_vss_temp_nie_jest_przewidywalny() {
 #[test]
 fn src_add_remote_nie_przekazuje_sekretow_w_argumentach() {
     let s = repo_file("app/src-tauri/src/main.rs");
+    // żadnych programów zewnętrznych: konta i sekrety obsługuje własny magazyn (klucze systemu / plik szyfrowany)
+    for zakazane in [
+        "run_rclone",
+        "set_remote_keys",
+        "rclone_obscure",
+        "SYNCRON_RCLONE",
+    ] {
+        assert!(!s.contains(zakazane), "pozostałość po rclone: {zakazane}");
+    }
+    let start = s.find("async fn add_remote").unwrap();
+    let body = &s[start..start + 600];
     assert!(
-        s.contains("set_remote_keys"),
-        "sekrety powinny trafiać do pliku konfiguracji, nie do argv"
+        body.contains(".add("),
+        "add_remote powinno delegować do magazynu kont (sekrety poza accounts.json)"
     );
-    // poprawka: wartości wrażliwe przez zmienną środowiskową (RCLONE_CONFIG_<NAME>_PASS) albo stdin/`rclone obscure -`
-    assert!(
-        !s.contains("format!(\"{k}={v}\")"),
-        "wartości pól (pass, client_secret, ...) lądują w argv"
-    );
+    assert!(!s.contains("format!(\"{k}={v}\")"));
 }
 
 #[test]
-fn src_add_remote_waliduje_kind_i_klucze() {
-    let s = repo_file("app/src-tauri/src/main.rs");
-    let start = s.find("async fn add_remote").unwrap();
-    let body = &s[start..start + 1200];
-    assert!(
-        body.contains("kind.chars()")
-            || body.contains("is_ascii_alphanumeric")
-                && body.matches("is_ascii_alphanumeric").count() >= 2,
-        "brak walidacji `kind` i kluczy `params`"
-    );
+fn add_remote_waliduje_kind_i_klucze() {
+    use std::collections::BTreeMap;
+    let t = tempfile::tempdir().unwrap();
+    let st = syncron_core::accounts::Store::file_only(t.path());
+    let ok: BTreeMap<String, String> = BTreeMap::new();
+    for zly_rodzaj in ["", "a b", "--x", "a/b", "ąę"] {
+        assert!(st.add("konto", zly_rodzaj, &ok).is_err(), "{zly_rodzaj:?}");
+    }
+    for zly_klucz in ["", "--password-command", "a b", "a=b", "-x"] {
+        let mut p = BTreeMap::new();
+        p.insert(zly_klucz.to_string(), "v".to_string());
+        assert!(st.add("konto", "mem", &p).is_err(), "{zly_klucz:?}");
+    }
+    let mut p = BTreeMap::new();
+    p.insert("host".to_string(), "a\nb".to_string());
+    assert!(st.add("konto", "mem", &p).is_err(), "nowa linia w wartości");
 }
 
 #[test]
