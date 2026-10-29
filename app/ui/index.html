@@ -58,6 +58,7 @@
   <section id="tab-accounts" class="tab">
     <header class="page"><div><h1>Konta chmurowe</h1><p class="sub">Po połączeniu konto pojawi się jako lokalizacja <code>nazwa:</code> (np. <code>gdrive:Dokumenty</code>).</p></div></header>
     <div class="box" id="remotes"></div>
+    <p class="muted" id="smbHint">Udziały SMB/CIFS (dysk sieciowy Windows, Samba, NAS) nie wymagają konta: wpisz ścieżkę sieciową, np. <code>\\serwer\udział</code>, albo zamontowany folder, w kreatorze zadania.</p>
     <h3>Dodaj konto</h3>
     <div class="providers" id="providers"></div>
     <div class="box form" id="rForm" hidden style="margin-top:14px">
@@ -137,10 +138,10 @@
         <label>Nazwa zadania<input name="name" placeholder="np. Dokumenty ⇄ NAS"></label>
         <div class="g2">
           <div><label>Lewa lokalizacja<input name="left" placeholder="C:\Dokumenty lub gdrive:Folder"></label>
-            <div class="pick"><button type="button" class="sm" data-pick="left"><span data-i="folder"></span>Wybierz folder…</button><select data-remote="left"></select></div>
+            <div class="pick"><button type="button" class="sm" data-pick="left"><span data-i="folder"></span>Wybierz folder…</button><button type="button" class="sm" data-browse="left" hidden>Przeglądaj…</button><select data-remote="left"></select></div>
             <div class="hint" data-hint="left"></div></div>
           <div><label>Prawa lokalizacja<input name="right" placeholder="\\serwer\udział lub onedrive:"></label>
-            <div class="pick"><button type="button" class="sm" data-pick="right"><span data-i="folder"></span>Wybierz folder…</button><select data-remote="right"></select></div>
+            <div class="pick"><button type="button" class="sm" data-pick="right"><span data-i="folder"></span>Wybierz folder…</button><button type="button" class="sm" data-browse="right" hidden>Przeglądaj…</button><select data-remote="right"></select></div>
             <div class="hint" data-hint="right"></div></div>
         </div>
         <p class="msg warn" id="nestWarn" role="alert" hidden>Uwaga: jedna lokalizacja leży wewnątrz drugiej. Synchronizacja kopiowałaby folder sam do siebie — wybierz foldery, które się nie zawierają.</p>
@@ -295,6 +296,16 @@
 </dialog>
 
 <div id="zoomHud" role="status" aria-live="polite"></div>
+<dialog id="rbrowse" style="width:min(560px,94vw)">
+  <div class="dh"><h2 id="rbTitle">Przeglądaj konto</h2></div>
+  <div class="db">
+    <div class="pick"><button type="button" class="sm" id="rbUp">W górę</button><code id="rbPath" data-nt></code></div>
+    <div id="rbList" role="list"></div>
+    <p class="muted" id="rbMsg" role="status"></p>
+  </div>
+  <div class="df"><span></span><button type="button" id="rbClose" class="primary">Gotowe</button></div>
+</dialog>
+
 <div id="toasts" role="status" aria-live="polite"></div>
 <script src="i18n.js"></script>
 <script src="scale.js"></script>

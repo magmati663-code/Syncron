@@ -54,7 +54,7 @@ Plik `.syncignore` w głównym folderze któregokolwiek boku (jedna maska na lin
 
 ## Chmury
 Połączenia z chmurami obsługuje dołączony do instalatora [rclone](https://rclone.org). Konta dodajesz w zakładce
-„Konta chmurowe”, a potem wybierasz je jako lokalizację (`gdrive:Folder`).
+„Konta chmurowe” (formularz zależy od usługi: WebDAV/Nextcloud, FTP/FTPS, SFTP, S3, Google Drive, OneDrive, Dropbox), a potem wybierasz je jako lokalizację (`konto:Folder`); w kreatorze przycisk „Przeglądaj…” otwiera drzewo folderów konta. Udziały SMB: wpisz ścieżkę sieciową (`\\serwer\udział`) lub zamontowany folder.
 **Bitrix24:** podaj adres WebDAV swojego Dysku (Bitrix24 → Dysk → „Połącz dysk sieciowy”) oraz login i hasło/hasło aplikacji.
 
 ## Rozwój
