@@ -1,7 +1,41 @@
 [package]
-name = "syncpolak-core"
-version = "0.1.0"
+name = "syncron-core"
+version = "0.7.5"
 edition = "2021"
 
 [dependencies]
 unicode-normalization = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+notify = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+filetime = "0.2"
+log = "0.4"
+anyhow = "1"
+blake3 = { version = "1", default-features = false, features = ["std"] }
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+suppaftp = { version = "12", default-features = false, features = ["rustls-ring", "deprecated"] }
+webpki-roots = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh-sftp = "3"
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "io-util", "sync"] }
+quick-xml = "0.42"
+# WebDAV jest napisany pod API 0.37 (do ujednolicenia z S3 w przyszłości)
+quick-xml-037 = { package = "quick-xml", version = "0.37" }
+ring = "0.17"
+chacha20poly1305 = "0.10"
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+aes = "0.8"
+ctr = "0.9"
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+unicode-normalization = "0.1"
+filetime = "0.2"
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
