@@ -10,6 +10,8 @@ use std::path::Path;
 
 const MAX_XML_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DEPTH: usize = 64;
+const MAX_MASKS: usize = 5_000;
+const MAX_PAIRS: usize = 500;
 
 // ---------- minimalny parser XML ----------
 
@@ -68,7 +70,10 @@ fn decode_entities(t: &str) -> String {
     while let Some(p) = rest.find('&') {
         out.push_str(&rest[..p]);
         rest = &rest[p..];
-        let Some(end) = rest.find(';').filter(|e| *e <= 12) else {
+        let Some(end) = rest.as_bytes()[..rest.len().min(13)]
+            .iter()
+            .position(|b| *b == b';')
+        else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -287,9 +292,10 @@ fn collect_masks(n: Option<&Node>) -> Vec<String> {
         split(&it.text, &mut raw);
     }
     let mut out: Vec<String> = Vec::new();
-    for r in raw {
+    let mut seen = std::collections::HashSet::new();
+    for r in raw.into_iter().take(MAX_MASKS) {
         for g in mask_to_globs(&r) {
-            if !out.contains(&g) {
+            if seen.insert(g.clone()) {
                 out.push(g);
             }
         }
@@ -358,8 +364,17 @@ fn apply_sync(job: &mut Job, n: &Node) {
         match v.to_lowercase().as_str() {
             "mirror" => job.mode = Mode::LeftToRight,
             "update" => {
-                job.mode = Mode::LeftToRight;
+                // „Update” w FreeFileSync: nowsze/nowe z lewej na prawą, nic nie usuwa, nowszy prawy zostaje
+                job.mode = Mode::Custom;
+                job.no_delete_left = true;
                 job.no_delete_right = true;
+                job.custom = Some(CustomRules {
+                    left_only: CustomAction::CopyToRight,
+                    right_only: CustomAction::Skip,
+                    left_newer: CustomAction::CopyToRight,
+                    right_newer: CustomAction::Skip,
+                    different: CustomAction::CopyToRight,
+                });
             }
             "custom" => {
                 job.mode = Mode::Custom;
@@ -369,7 +384,8 @@ fn apply_sync(job: &mut Job, n: &Node) {
                 let conflict = g("Conflict");
                 let different = g("Different");
                 // w trybie „zawartość” FreeFileSync zna tylko kategorię „Different” (bez nowszy/starszy)
-                let diff_dir = if content {
+                let size_only = job.compare == Compare::SizeOnly;
+                let diff_dir = if content || size_only {
                     different.or(conflict)
                 } else {
                     conflict.or(different)
@@ -430,8 +446,9 @@ fn apply_filter(job: &mut Job, f: &Node, replace_include: bool) {
             job.include.extend(inc);
         }
     }
+    let mut have: std::collections::HashSet<String> = job.exclude.iter().cloned().collect();
     for g in collect_masks(f.child("Exclude")) {
-        if !job.exclude.contains(&g) {
+        if have.insert(g.clone()) {
             job.exclude.push(g);
         }
     }
@@ -462,6 +479,14 @@ fn apply_filter(job: &mut Job, f: &Node, replace_include: bool) {
     }
 }
 
+/// Lokalizacje FreeFileSync typu `sftp://u@host/dir`, `ftp://…`, `sftp:|pass=…|/x`: u nas to konta, nie URL-e.
+fn is_foreign_remote(p: &str) -> bool {
+    let l = p.to_lowercase();
+    ["sftp:", "ftp:", "ftps:", "gdrive:"].iter().any(|k| {
+        l.starts_with(k) && (l[k.len()..].starts_with("//") || l[k.len()..].starts_with('|'))
+    })
+}
+
 fn base_name(p: &str) -> String {
     p.trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
@@ -490,6 +515,7 @@ pub fn parse_ffs_named(xml: &str, stem: Option<&str>) -> Result<Vec<Job>, String
         "mode": "TwoWay", "conflict": "Newer", "schedule": {"type": "Manual"}
     }))
     .map_err(|e| e.to_string())?;
+    let cfg = root.child("MainConfig").unwrap_or(&root);
     let mut base = blank;
     base.enabled = false;
     base.run_before = None;
@@ -497,7 +523,7 @@ pub fn parse_ffs_named(xml: &str, stem: Option<&str>) -> Result<Vec<Job>, String
     base.webhook_url = None;
     // bez dokładnych danych FreeFileSync domyślnie nie wykrywa przeniesień
     base.detect_moves = false;
-    if let Some(c) = root.child("Compare") {
+    if let Some(c) = cfg.child("Compare").or(cfg.child("Comparison")) {
         apply_compare(&mut base, c);
     }
     // tolerancja czasu bywa w ustawieniach globalnych albo bezpośrednio w pliku
@@ -511,17 +537,22 @@ pub fn parse_ffs_named(xml: &str, stem: Option<&str>) -> Result<Vec<Job>, String
             base.time_shift_hours = parse_hours(t.txt());
         }
     }
-    if let Some(s) = root.child("Synchronize") {
+    if let Some(s) = cfg.child("Synchronize").or(cfg.child("SyncConfig")) {
         apply_sync(&mut base, s);
     }
-    if let Some(f) = root.child("Filter") {
+    if let Some(f) = cfg.child("Filter").or(cfg.child("GlobalFilter")) {
         apply_filter(&mut base, f, false);
     }
 
-    let pairs: Vec<&Node> = root
+    let pairs: Vec<&Node> = cfg
         .child("FolderPairs")
         .map(|fp| fp.children_named("Pair").collect())
         .unwrap_or_default();
+    if pairs.len() > MAX_PAIRS {
+        return Err(format!(
+            "Plik FreeFileSync zawiera zbyt wiele par folderów (limit {MAX_PAIRS})."
+        ));
+    }
     let mut jobs: Vec<Job> = Vec::new();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -539,13 +570,23 @@ pub fn parse_ffs_named(xml: &str, stem: Option<&str>) -> Result<Vec<Job>, String
                 idx + 1
             ));
         }
+        if let Some(bad) = [&left, &right]
+            .into_iter()
+            .find(|p| p.chars().any(char::is_control) || is_foreign_remote(p))
+        {
+            return Err(format!(
+                "Para folderów nr {}: ścieżka „{}” nie jest obsługiwana (znaki sterujące albo zdalna lokalizacja FreeFileSync sftp:/ftp:; dodaj konto w zakładce Konta).",
+                idx + 1,
+                bad.escape_debug()
+            ));
+        }
         let mut j = base.clone();
         j.left = left;
         j.right = right;
-        if let Some(c) = p.child("Compare") {
+        if let Some(c) = p.child("Compare").or(p.child("Comparison")) {
             apply_compare(&mut j, c);
         }
-        if let Some(s) = p.child("Synchronize") {
+        if let Some(s) = p.child("Synchronize").or(p.child("SyncConfig")) {
             apply_sync(&mut j, s);
         }
         if let Some(f) = p.child("LocalFilter") {
@@ -582,6 +623,14 @@ pub fn read_ffs_file(path: &Path) -> Result<Vec<Job>, String> {
     }
     let bytes = std::fs::read(path)
         .map_err(|e| format!("Nie można odczytać pliku {}: {e}", path.display()))?;
+    if std::str::from_utf8(&bytes).is_err()
+        && !bytes.starts_with(&[0xFF, 0xFE])
+        && !bytes.starts_with(&[0xFE, 0xFF])
+    {
+        return Err(
+            "Plik FreeFileSync nie jest w UTF-8 ani UTF-16; zapisz go ponownie w UTF-8.".into(),
+        );
+    }
     let text = crate::rules::decode_text(&bytes);
     let stem = path
         .file_stem()

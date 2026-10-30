@@ -400,27 +400,56 @@ fn survives(other: &Location, real: &str, side: &str) -> Option<String> {
     }
 }
 
+/// Cel kopii, którego skan nie widział (filtr wieku/rozmiaru, dowiązanie, błąd listingu), ale który istnieje:
+/// nie nadpisujemy go (strażnik analogiczny do `survives` dla usuwania).
+fn overwrite_unseen(src: &Entry, dst: &Location, de: Option<&Entry>) -> Option<String> {
+    if de.is_some() {
+        return None;
+    }
+    match dst.stat_checked(&src.real) {
+        Ok(None) => None,
+        Ok(Some(_)) => Some(format!(
+            "ostrzeżenie: {}: cel istnieje, choć nie został wykryty przy skanowaniu (filtry, dowiązanie lub błąd listowania) - pominięto nadpisanie",
+            src.real
+        )),
+        Err(e) => Some(format!(
+            "ostrzeżenie: {}: nie można sprawdzić celu ({e}) - pominięto nadpisanie",
+            src.real
+        )),
+    }
+}
+
 fn exec(key: &str, a: &Action, c: &Ctx) -> Out {
     let (le, re) = (c.ls.get(key), c.rs.get(key));
     match a {
-        Action::CopyToRight => match (le, copy_one(c.l, le.unwrap(), c.r, re, c.trash, c.o)) {
-            (_, Ok((l, r))) => Out::Synced {
-                key: key.into(),
-                l,
-                r,
-                kind: "kopiowanie →",
-            },
-            (_, Err(e)) => err_out(key, e),
-        },
-        Action::CopyToLeft => match copy_one(c.r, re.unwrap(), c.l, le, c.trash, c.o) {
-            Ok((r, l)) => Out::Synced {
-                key: key.into(),
-                l,
-                r,
-                kind: "kopiowanie ←",
-            },
-            Err(e) => err_out(key, e),
-        },
+        Action::CopyToRight => {
+            if let Some(w) = overwrite_unseen(le.unwrap(), c.r, re) {
+                return Out::Warn(key.into(), w);
+            }
+            match copy_one(c.l, le.unwrap(), c.r, re, c.trash, c.o) {
+                Ok((l, r)) => Out::Synced {
+                    key: key.into(),
+                    l,
+                    r,
+                    kind: "kopiowanie →",
+                },
+                Err(e) => err_out(key, e),
+            }
+        }
+        Action::CopyToLeft => {
+            if let Some(w) = overwrite_unseen(re.unwrap(), c.l, le) {
+                return Out::Warn(key.into(), w);
+            }
+            match copy_one(c.r, re.unwrap(), c.l, le, c.trash, c.o) {
+                Ok((r, l)) => Out::Synced {
+                    key: key.into(),
+                    l,
+                    r,
+                    kind: "kopiowanie ←",
+                },
+                Err(e) => err_out(key, e),
+            }
+        }
         Action::RenameRight { from } => match (c.rs.get(from), le) {
             (Some(old), Some(new)) => match move_one(c.l, new, c.r, old, c.trash, c.o) {
                 Ok((l, r)) => Out::Moved {
@@ -679,13 +708,19 @@ fn equalize_by_content(
     (l, r): (&Location, &Location),
     (ll, rl): (&BTreeMap<String, Entry>, &BTreeMap<String, Entry>),
     (lt, rt): (&Tree, &mut Tree),
+    (bl, br): (&Tree, &Tree),
     cmp: &Cmp,
 ) {
     for (k, lm) in lt {
         let (Some(rm), Some(le), Some(re)) = (rt.get(k).copied(), ll.get(k), rl.get(k)) else {
             continue;
         };
-        if lm.size != rm.size || same_c(lm, &rm, cmp) {
+        if lm.size != rm.size {
+            continue;
+        }
+        let same = same_c(lm, &rm, cmp);
+        // zgodne z migawką po obu stronach: nie liczymy skrótów przy każdym przebiegu
+        if same && bl.get(k) == Some(lm) && br.get(k) == Some(&rm) {
             continue;
         }
         let eq = match (local_hash(l, &le.real), local_hash(r, &re.real)) {
@@ -698,9 +733,12 @@ fn equalize_by_content(
                 }
             },
         };
-        if eq {
-            if let Some(x) = rt.get_mut(k) {
+        if let Some(x) = rt.get_mut(k) {
+            if eq && !same {
                 x.mtime = lm.mtime;
+            } else if !eq && same {
+                // ten sam rozmiar i czas, a inna treść: wymuszamy różnicę, by plik nie został uznany za identyczny
+                x.mtime = lm.mtime.saturating_add(cmp.tol_secs as i64 + 1);
             }
         }
     }
@@ -750,7 +788,13 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
     let cmp = job.cmp();
     let (lt, mut rt) = (tree(&ll.files), tree(&rl.files));
     if job.compare == Compare::Content {
-        equalize_by_content((&l, &r), (&ll.files, &rl.files), (&lt, &mut rt), &cmp);
+        equalize_by_content(
+            (&l, &r),
+            (&ll.files, &rl.files),
+            (&lt, &mut rt),
+            (&bl, &br),
+            &cmp,
+        );
     }
     let mut actions = plan_ext(&lt, &rt, &bl, &br, job.options(), job.plan_ext());
     if job.detect_moves {
@@ -951,9 +995,11 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
         }
         match (lt.get(k), rt.get(k)) {
             (Some(a), Some(b)) if same_c(a, b, &cmp) => {
+                // do migawki trafia prawdziwy czas prawego pliku, nie ten wyrównany przez porównanie zawartości
+                let rmtime = rl.files.get(k).map_or(b.mtime, |e| e.meta.mtime);
                 tx.execute(
                     "INSERT OR REPLACE INTO base(job,key,lsize,lmtime,rsize,rmtime) VALUES(?1,?2,?3,?4,?5,?6)",
-                    params![job.id, k, a.size as i64, a.mtime, b.size as i64, b.mtime],
+                    params![job.id, k, a.size as i64, a.mtime, b.size as i64, rmtime],
                 )?;
             }
             (None, None) => {

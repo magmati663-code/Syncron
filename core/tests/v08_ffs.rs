@@ -103,7 +103,7 @@ fn warianty_synchronizacji() {
     assert_eq!(mirror.mode, Mode::LeftToRight);
     assert!(!mirror.no_delete_right);
     let update = &parse_ffs_xml(&simple("<Variant>Update</Variant>", "", "")).unwrap()[0];
-    assert_eq!(update.mode, Mode::LeftToRight);
+    assert_eq!(update.mode, Mode::Custom);
     assert!(update.no_delete_right);
     let two = &parse_ffs_xml(&simple("<Variant>TwoWay</Variant>", "", "")).unwrap()[0];
     assert_eq!(two.mode, Mode::TwoWay);

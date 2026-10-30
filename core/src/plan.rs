@@ -172,7 +172,7 @@ pub fn same_c(a: &Meta, b: &Meta, c: &Cmp) -> bool {
         return false;
     }
     // najbliższa całkowita liczba godzin
-    let k = (diff + 1800) / 3600;
+    let k = diff / 3600 + u64::from(diff % 3600 >= 1800);
     k >= 1 && k <= c.shift_hours as u64 && diff.abs_diff(k * 3600) <= tol
 }
 

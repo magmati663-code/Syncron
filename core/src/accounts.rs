@@ -230,12 +230,32 @@ fn write_atomic(path: &Path, data: &[u8], private: bool) -> Result<(), String> {
 }
 
 /// Zachowuje kopię uszkodzonego pliku (`<plik>.corrupt-<data>`), by niczego nie niszczyć bez śladu.
+/// Adres z `://użytkownik[:hasło]@host`: dane logowania nie mogą trafić jawnie do `accounts.json`.
+fn has_url_userinfo(v: &str) -> bool {
+    v.split_once("://").is_some_and(|(_, rest)| {
+        rest.split(['/', '?', '#'])
+            .next()
+            .is_some_and(|a| a.contains('@'))
+    })
+}
+
 fn backup_corrupt(path: &Path) -> Option<PathBuf> {
     let content = std::fs::read(path).ok()?;
     if content.iter().all(|b| b.is_ascii_whitespace()) {
         return None;
     }
     let name = path.file_name()?.to_string_lossy().into_owned();
+    // ta sama treść była już zachowana: nie mnożymy kopii przy każdym odczycie
+    let prefix = format!("{name}.corrupt-");
+    if let Ok(rd) = std::fs::read_dir(path.parent()?) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix)
+                && std::fs::read(e.path()).is_ok_and(|c| c == content)
+            {
+                return Some(e.path());
+            }
+        }
+    }
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
     for n in 0..1000 {
         let p = path.with_file_name(if n == 0 {
@@ -249,6 +269,11 @@ fn backup_corrupt(path: &Path) -> Option<PathBuf> {
             .open(&p)
         {
             use std::io::Write;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+            }
             return f.write_all(&content).ok().map(|_| p);
         }
     }
@@ -460,7 +485,17 @@ impl EncryptedFile {
     }
     fn read_key(&self) -> Option<[u8; 32]> {
         let b = std::fs::read(self.key_path()).ok()?;
-        <[u8; 32]>::try_from(b.as_slice()).ok()
+        // edytory potrafią dopisać znak nowej linii: nadmiarowe białe znaki ignorujemy
+        let end = b
+            .iter()
+            .rposition(|c| !c.is_ascii_whitespace())
+            .map_or(0, |i| i + 1);
+        let b = if b.len() > 32 && end <= 32 {
+            &b[..32]
+        } else {
+            &b[..]
+        };
+        <[u8; 32]>::try_from(b).ok()
     }
     fn make_key(&self) -> Result<[u8; 32], String> {
         let k: [u8; 32] = XChaCha20Poly1305::generate_key(&mut OsRng).into();
@@ -533,6 +568,7 @@ impl EncryptedFile {
             Err(ReadErr::Corrupt(why)) => {
                 log::warn!("{why}; zaczynam od pustego magazynu sekretów");
                 backup_corrupt(&self.path());
+                backup_corrupt(&self.key_path());
                 let _ = std::fs::remove_file(self.path());
                 let _ = std::fs::remove_file(self.key_path());
                 SecretMap::new()
@@ -700,6 +736,9 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(format!("Nie można odczytać {}: {e}", p.display())),
         };
+        let raw = raw
+            .strip_prefix(b"\xEF\xBB\xBF")
+            .map_or(raw.clone(), <[u8]>::to_vec);
         if raw.iter().all(|b| b.is_ascii_whitespace()) {
             return Ok(Vec::new());
         }
@@ -803,6 +842,10 @@ impl Store {
                 if v.len() > 64 * 1024 {
                     return Err(format!("Wartość pola „{k}” jest zbyt długa."));
                 }
+            } else if has_url_userinfo(v) {
+                return Err(format!(
+                    "Pole „{k}”: nie wpisuj użytkownika ani hasła w adresie (user:hasło@host); użyj pól Użytkownik i Hasło."
+                ));
             } else if v.len() > 4096 || v.chars().any(|c| c == '\0' || c == '\n' || c == '\r') {
                 return Err(format!(
                     "Wartość pola „{k}” jest zbyt długa lub zawiera znaki nowej linii."
@@ -872,24 +915,24 @@ impl Store {
         } else {
             label
         };
-        for (k, v) in secrets {
-            if let Err(e) = store.set(&acc.name, k, v) {
-                let _ = store.delete_account(&acc.name, &acc.secret_keys);
-                return Err(format!("Nie można zapisać hasła w magazynie sekretów: {e}"));
-            }
-        }
+        // najpierw rejestrujemy konto: przegrany wyścig o nazwę nie dotyka sekretów zwycięzcy
         let added = acc.clone();
-        let r = self.update_accounts(|v| {
+        self.update_accounts(|v| {
             if v.iter().any(|a| canon_name(&a.name) == c) {
                 return Err(format!("Konto „{}” już istnieje.", added.name));
             }
             v.push(added);
             Ok(())
-        });
-        if let Err(e) = r {
-            // nie zostawiaj osieroconych sekretów
-            let _ = store.delete_account(&acc.name, &acc.secret_keys);
-            return Err(e);
+        })?;
+        for (k, v) in secrets {
+            if let Err(e) = store.set(&acc.name, k, v) {
+                let _ = store.delete_account(&acc.name, &acc.secret_keys);
+                let _ = self.update_accounts(|v| {
+                    v.retain(|a| canon_name(&a.name) != c);
+                    Ok(())
+                });
+                return Err(format!("Nie można zapisać hasła w magazynie sekretów: {e}"));
+            }
         }
         Ok(acc)
     }
