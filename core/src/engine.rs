@@ -997,6 +997,14 @@ fn run_core(job: &Job, state_dir: &Path, ro: RunOpts) -> anyhow::Result<Report> 
             (Some(a), Some(b)) if same_c(a, b, &cmp) => {
                 // do migawki trafia prawdziwy czas prawego pliku, nie ten wyrównany przez porównanie zawartości
                 let rmtime = rl.files.get(k).map_or(b.mtime, |e| e.meta.mtime);
+                // migawka już zgodna z dyskiem: nie przepisujemy wiersza (pusty przebieg nie zapisuje nic)
+                let rm = Meta {
+                    size: b.size,
+                    mtime: rmtime,
+                };
+                if bl.get(k) == Some(a) && br.get(k) == Some(&rm) {
+                    continue;
+                }
                 tx.execute(
                     "INSERT OR REPLACE INTO base(job,key,lsize,lmtime,rsize,rmtime) VALUES(?1,?2,?3,?4,?5,?6)",
                     params![job.id, k, a.size as i64, a.mtime, b.size as i64, rmtime],
