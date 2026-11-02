@@ -1,0 +1,18 @@
+[package]
+name = "syncron-cli"
+version = "0.7.5"
+edition = "2021"
+description = "Syncron: wersja z linią poleceń i trybem usługi (bez interfejsu graficznego)"
+
+[[bin]]
+name = "syncron"
+path = "src/main.rs"
+
+[dependencies]
+syncron-core = { path = "../core" }
+serde_json = "1"
+log = { version = "0.4", features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3"

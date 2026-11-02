@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Testy silnika (Windows, macOS, Linux)
+        run: cargo test -p syncron-core -p syncron-cli -- --nocapture --test-threads=1
+      - name: Clippy silnika i CLI
+        run: cargo clippy -p syncron-core -p syncron-cli --all-targets -- -D warnings

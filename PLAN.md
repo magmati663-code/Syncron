@@ -1,4 +1,4 @@
-# SyncPolak: plan (80 punktów)
+# Syncron: plan (80 punktów)
 
 Lekka aplikacja do synchronizacji (Windows + macOS): foldery lokalne, dyski sieciowe, Google Drive, OneDrive, Bitrix24 Drive.
 

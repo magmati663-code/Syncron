@@ -1,0 +1,107 @@
+name: Wydanie (instalatory Windows i macOS)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: "", suffix: windows-amd64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, suffix: osx-arm64 }
+          - { os: macos-latest, target: x86_64-apple-darwin, suffix: osx-amd64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Podpis Windows (certyfikat z sekretów, jeśli podano)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { Write-Host "Brak sekretu WINDOWS_CERTIFICATE: instalator nie zostanie podpisany."; exit 0 }
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $pw = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw | Out-Null
+          $thumb = (Get-PfxCertificate -FilePath cert.pfx -Password $pw).Thumbprint
+          $path = "app/src-tauri/tauri.conf.json"
+          $conf = Get-Content $path -Raw | ConvertFrom-Json
+          $conf.bundle.windows | Add-Member -NotePropertyName certificateThumbprint -NotePropertyValue $thumb -Force
+          $conf.bundle.windows | Add-Member -NotePropertyName digestAlgorithm -NotePropertyValue "sha256" -Force
+          $conf.bundle.windows | Add-Member -NotePropertyName timestampUrl -NotePropertyValue "http://timestamp.digicert.com" -Force
+          $conf | ConvertTo-Json -Depth 20 | Set-Content $path -Encoding utf8
+          Remove-Item cert.pfx
+          Write-Host "Podpis Windows włączony."
+      - name: Podpis i notaryzacja macOS (jeśli podano sekrety)
+        if: runner.os == 'macOS'
+        env:
+          S_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          S_CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          S_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          S_ID: ${{ secrets.APPLE_ID }}
+          S_PW: ${{ secrets.APPLE_PASSWORD }}
+          S_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$S_CERT" ]; then echo "Brak sekretu APPLE_CERTIFICATE: aplikacja nie zostanie podpisana."; exit 0; fi
+          {
+            echo "APPLE_CERTIFICATE=$S_CERT"
+            echo "APPLE_CERTIFICATE_PASSWORD=$S_CERT_PW"
+            echo "APPLE_SIGNING_IDENTITY=$S_IDENTITY"
+            echo "APPLE_ID=$S_ID"
+            echo "APPLE_PASSWORD=$S_PW"
+            echo "APPLE_TEAM_ID=$S_TEAM"
+          } >> "$GITHUB_ENV"
+          echo "Podpis i notaryzacja macOS włączone."
+      - name: Artefakty automatycznych aktualizacji (jeśli podano klucz)
+        shell: bash
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$UPDATER_KEY" ]; then
+            node -e "const f='app/src-tauri/tauri.conf.json',c=JSON.parse(require('fs').readFileSync(f,'utf8'));c.bundle.createUpdaterArtifacts=true;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+            echo "Aktualizacje automatyczne włączone."
+          else
+            echo "Brak sekretu TAURI_SIGNING_PRIVATE_KEY: bez artefaktów aktualizacji."
+          fi
+      - name: Budowa wersji z linią poleceń (dołączana do instalatora i do wydania)
+        shell: bash
+        run: |
+          T="${{ matrix.target }}"
+          if [ -n "$T" ]; then cargo build -p syncron-cli --release --target "$T"; SRC="target/$T/release/syncron"; else cargo build -p syncron-cli --release; SRC="target/release/syncron"; fi
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          cp "$SRC$EXT" "app/src-tauri/bin/syncron$EXT"
+          mkdir -p cli-out && cp "$SRC$EXT" "cli-out/syncron-cli-${{ matrix.suffix }}$EXT"
+      - name: Zależności Node (Tauri CLI)
+        working-directory: app
+        run: npm install
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: v__VERSION__
+          releaseName: "Syncron v__VERSION__"
+          releaseBody: "Instalatory: Windows (.exe/.msi), macOS (.dmg). Podpis zależy od certyfikatów w sekretach repozytorium (SIGNING.md); bez nich system pokaże ostrzeżenie."
+          releaseDraft: false
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+      - name: Wersja CLI jako osobny plik w wydaniu
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER=$(node -p "require('./app/package.json').version")
+          gh release upload "v$VER" cli-out/* --clobber --repo "${{ github.repository }}"

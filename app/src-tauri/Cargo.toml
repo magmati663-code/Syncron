@@ -1,0 +1,23 @@
+[package]
+name = "syncron-app"
+version = "0.7.5"
+edition = "2021"
+description = "Syncron: synchronizacja folderów, dysków sieciowych i chmur"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+syncron-core = { path = "../../core" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+log = { version = "0.4", features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

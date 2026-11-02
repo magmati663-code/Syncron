@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Uprawnienia głównego okna","local":true,"windows":["main"],"permissions":["core:default","dialog:default","autostart:allow-enable","autostart:allow-disable","autostart:allow-is-enabled","notification:default","updater:default","process:allow-restart","dialog:allow-save","dialog:allow-open"]}}
